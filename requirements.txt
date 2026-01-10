@@ -1,0 +1,9 @@
+streamlit
+requests
+plotly
+groq
+google-generativeai
+pydantic
+flask
+flask-cors
+xlsxwriter
