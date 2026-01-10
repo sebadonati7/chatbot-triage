@@ -25,12 +25,13 @@ from typing import Dict, List, Any, Optional, Tuple
 import plotly.graph_objects as go
 
 # === GESTIONE DIPENDENZE OPZIONALI ===
+# CRITICAL: Check fatto DOPO st.set_page_config per evitare crash
 try:
     import xlsxwriter
     XLSX_AVAILABLE = True
 except ImportError:
     XLSX_AVAILABLE = False
-    st.warning("⚠️ xlsxwriter non disponibile. Export Excel disabilitato.")
+    # Warning mostrato in main() per non violare order rule
 
 # === COSTANTI ===
 LOG_FILE = "triage_logs.jsonl"
@@ -55,7 +56,18 @@ SPECIALIZZAZIONI = [
     "Pediatria", "Ginecologia", "Dermatologia", "Psichiatria",
     "Otorinolaringoiatria", "Oftalmologia", "Generale"
 ]
+def cleanup_streamlit_cache():
+    """Rimuove le cache fisiche che possono causare il 'Failed to fetch'"""
+    cache_dirs = ['.streamlit/cache', '__pycache__']
+    for d in cache_dirs:
+        if os.path.exists(d):
+            try:
+                shutil.rmtree(d)
+            except:
+                pass
 
+cleanup_streamlit_cache()
+# --------------------------
 
 # === CLASSE PRINCIPALE: TRIAGE DATA STORE ===
 class TriageDataStore:
@@ -73,7 +85,7 @@ class TriageDataStore:
         self._enrich_data()
     
     def _load_data(self):
-        """Caricamento JSONL con gestione errori robusta."""
+        """Caricamento JSONL con gestione errori robusta e encoding resiliente."""
         if not os.path.exists(self.filepath):
             st.warning(f"⚠️ File {self.filepath} non trovato. Nessun dato disponibile.")
             return
@@ -82,24 +94,38 @@ class TriageDataStore:
             st.warning(f"⚠️ File {self.filepath} vuoto. Inizia un triage per popolare i dati.")
             return
         
-        try:
-            with open(self.filepath, 'r', encoding='utf-8') as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    
-                    try:
-                        record = json.loads(line)
-                        self.records.append(record)
-                    except json.JSONDecodeError as e:
-                        self.parse_errors += 1
-                        print(f"⚠️ Errore parsing riga {line_num}: {e}")
-                        continue
+        # CRITICAL: Prova encoding multipli per massima resilienza
+        encodings_to_try = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
         
-        except Exception as e:
-            st.error(f"❌ Errore lettura file: {e}")
-            return
+        for encoding in encodings_to_try:
+            try:
+                with open(self.filepath, 'r', encoding=encoding, errors='ignore') as f:
+                    for line_num, line in enumerate(f, 1):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        try:
+                            record = json.loads(line)
+                            self.records.append(record)
+                        except json.JSONDecodeError as e:
+                            self.parse_errors += 1
+                            print(f"Warning: Riga {line_num} corrotta, skipping: {e}")
+                            continue
+                
+                # Se siamo arrivati qui, l'encoding ha funzionato
+                if encoding != 'utf-8':
+                    print(f"Info: File caricato con encoding {encoding}")
+                break
+                
+            except UnicodeDecodeError:
+                # Prova con il prossimo encoding
+                continue
+            except Exception as e:
+                if encoding == encodings_to_try[-1]:
+                    # Ultimo tentativo fallito
+                    st.error(f"❌ Errore lettura file con tutti gli encoding: {e}")
+                    return
         
         if self.parse_errors > 0:
             st.info(f"ℹ️ {self.parse_errors} righe corrotte saltate durante il caricamento.")
@@ -454,18 +480,29 @@ def render_throughput_chart(kpi_vol: Dict):
     counts = [throughput[h] for h in hours]
     
     fig = go.Figure(data=[
-        go.Bar(x=hours, y=counts, marker_color='#4472C4')
+        go.Bar(
+            x=hours, 
+            y=counts, 
+            marker_color='#4A90E2',
+            hovertemplate='<b>Ora %{x}:00</b><br>Accessi: %{y}<extra></extra>'
+        )
     ])
     
     fig.update_layout(
         title="Throughput Orario (Distribuzione Accessi)",
         xaxis_title="Ora del Giorno",
         yaxis_title="N° Interazioni",
-        height=400
+        height=400,
+        hovermode='x unified',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(family="Arial, sans-serif", size=12)
     )
     
-    # MODIFICA 2026: rimosso use_container_width per evitare crash
-    st.plotly_chart(fig, width='stretch')
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='#e5e7eb')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#e5e7eb')
+    
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_urgenza_pie(kpi_clin: Dict):
@@ -482,16 +519,26 @@ def render_urgenza_pie(kpi_clin: Dict):
     colors = ['#00C853', '#FFEB3B', '#FF9800', '#FF5722', '#B71C1C']
     
     fig = go.Figure(data=[
-        go.Pie(labels=labels, values=values, marker_colors=colors[:len(labels)])
+        go.Pie(
+            labels=labels, 
+            values=values, 
+            marker_colors=colors[:len(labels)],
+            hovertemplate='<b>%{label}</b><br>Casi: %{value}<br>Percentuale: %{percent}<extra></extra>',
+            textinfo='label+percent',
+            textposition='auto'
+        )
     ])
     
     fig.update_layout(
         title="Stratificazione Urgenza (Codici 1-5)",
-        height=400
+        height=400,
+        showlegend=True,
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(family="Arial, sans-serif", size=12)
     )
     
-    # MODIFICA 2026: rimosso use_container_width per evitare crash
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, use_container_width=True)
 
 def render_sintomi_table(kpi_clin: Dict):
     """Tabella spettro sintomi completo (NON troncato)."""
@@ -511,15 +558,32 @@ def render_sintomi_table(kpi_clin: Dict):
             'Sintomo': [s[0].title() for s in sintomi_list],
             'Frequenza': [s[1] for s in sintomi_list]
         },
-        width='stretch',  # <--- CORRETTO: Sostituito use_container_width=True
+        use_container_width=True,  # <--- CORRETTO: Sostituito use_container_width=True
         height=400
     )
 # === MAIN APPLICATION ===
 def main():
-    # Carica dati
-    datastore = TriageDataStore(LOG_FILE)
-    district_data = load_district_mapping()
+    """Entry point principale con gestione errori robusta."""
     
+    # CRITICAL: Mostra warning xlsxwriter QUI, non nel global scope
+    if not XLSX_AVAILABLE:
+        st.sidebar.warning("⚠️ xlsxwriter non disponibile. Export Excel disabilitato.\nInstalla con: `pip install xlsxwriter`")
+    
+    # Carica dati con gestione errori robusta
+    try:
+        datastore = TriageDataStore(LOG_FILE)
+    except Exception as e:
+        st.error(f"❌ Errore fatale durante caricamento dati: {e}")
+        st.info("💡 Verifica che il file `triage_logs.jsonl` sia valido o rimuovilo per ripartire da zero.")
+        return
+    
+    try:
+        district_data = load_district_mapping()
+    except Exception as e:
+        st.warning(f"⚠️ Errore caricamento distretti: {e}")
+        district_data = {"health_districts": [], "comune_to_district_mapping": {}}
+    
+    # Early return se nessun dato
     if not datastore.records:
         st.warning("⚠️ Nessun dato disponibile. Inizia una chat per popolare i log.")
         st.info("💡 Avvia `frontend.py` sulla porta 8501 per generare dati di triage.")
@@ -550,7 +614,23 @@ def main():
     sel_week = st.sidebar.selectbox("Settimana ISO", ['Tutte'] + sorted(weeks)) if weeks else 'Tutte'
     sel_week = None if sel_week == 'Tutte' else sel_week
     
-    # Filtro Distretto (TODO: integrare mapping)
+    # Filtro Distretto Sanitario (Integrato con distretti_sanitari_er.json)
+    st.sidebar.divider()
+    st.sidebar.subheader("🏥 Filtro Distretto Sanitario")
+    
+    # Estrai distretti disponibili dal mapping
+    available_districts = []
+    if district_data and 'health_districts' in district_data:
+        available_districts = [d['name'] for d in district_data['health_districts']]
+    
+    sel_district = st.sidebar.selectbox(
+        "Distretto",
+        ['Tutti'] + sorted(available_districts),
+        key="district_filter"
+    )
+    sel_district = None if sel_district == 'Tutti' else sel_district
+    
+    # Filtro Comune (per compatibilità)
     comuni = datastore.get_unique_values('comune')
     sel_comune = st.sidebar.selectbox("Comune", ['Tutti'] + sorted([c for c in comuni if c])) if comuni else 'Tutti'
     sel_comune = None if sel_comune == 'Tutti' else sel_comune
@@ -563,33 +643,73 @@ def main():
     st.sidebar.subheader("📥 Export Dati")
     
     if XLSX_AVAILABLE and filtered_datastore.records:
-        kpi_vol = calculate_kpi_volumetrici(filtered_datastore)
-        kpi_clin = calculate_kpi_clinici(filtered_datastore)
-        kpi_ctx = calculate_kpi_context_aware(filtered_datastore)
-        
-        excel_data = export_to_excel(filtered_datastore, kpi_vol, kpi_clin, kpi_ctx)
-        
-        if excel_data:
-            filename = f"Report_Triage_W{sel_week or 'ALL'}_{sel_year or 'ALL'}.xlsx"
-            st.sidebar.download_button(
-                label="📊 Scarica Report Excel",
-                data=excel_data,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        try:
+            kpi_vol = calculate_kpi_volumetrici(filtered_datastore)
+            kpi_clin = calculate_kpi_clinici(filtered_datastore)
+            kpi_ctx = calculate_kpi_context_aware(filtered_datastore)
+            
+            excel_data = export_to_excel(filtered_datastore, kpi_vol, kpi_clin, kpi_ctx)
+            
+            if excel_data:
+                filename = f"Report_Triage_W{sel_week or 'ALL'}_{sel_year or 'ALL'}.xlsx"
+                st.sidebar.download_button(
+                    label="📊 Scarica Report Excel",
+                    data=excel_data,
+                    file_name=filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        except Exception as e:
+            st.sidebar.error(f"❌ Errore export Excel: {e}")
     
     # === MAIN DASHBOARD ===
-    st.title("🧬 AI Health Navigator | Analytics Dashboard v2")
+    st.title("🧬 SIRAYA Analytics | Dashboard Professionale")
     st.caption(f"📊 Dati: {len(filtered_datastore.records)} interazioni | {len(filtered_datastore.sessions)} sessioni")
     
     if not filtered_datastore.records:
         st.info("ℹ️ Nessun dato disponibile per i filtri selezionati.")
         return
     
-    # === CALCOLO KPI ===
-    kpi_vol = calculate_kpi_volumetrici(filtered_datastore)
-    kpi_clin = calculate_kpi_clinici(filtered_datastore)
-    kpi_ctx = calculate_kpi_context_aware(filtered_datastore)
+    # === KPI SELECTOR (Multiselect) ===
+    st.sidebar.divider()
+    st.sidebar.subheader("📊 Personalizza KPI")
+    
+    available_kpis = {
+        "Volumetrici": ["Sessioni Univoche", "Throughput Orario", "Completion Rate", "Tempo Mediano"],
+        "Clinici": ["Stratificazione Urgenza", "Spettro Sintomi", "Red Flags"],
+        "Context-Aware": ["Urgenza per Specializzazione", "Deviazione PS"]
+    }
+    
+    selected_kpis = st.sidebar.multiselect(
+        "Seleziona KPI da visualizzare",
+        options=["Tutti"] + [f"{cat}: {kpi}" for cat, kpis in available_kpis.items() for kpi in kpis],
+        default=["Tutti"],
+        key="kpi_selector"
+    )
+    
+    # Se "Tutti" è selezionato, mostra tutto
+    show_all_kpis = "Tutti" in selected_kpis
+    
+    # === CALCOLO KPI CON PROTEZIONE ERRORI ===
+    try:
+        kpi_vol = calculate_kpi_volumetrici(filtered_datastore)
+    except Exception as e:
+        st.error(f"❌ Errore calcolo KPI volumetrici: {e}")
+        kpi_vol = {'sessioni_uniche': 0, 'interazioni_totali': 0, 'completion_rate': 0, 
+                   'tempo_mediano_minuti': 0, 'profondita_media': 0, 'throughput_orario': {}}
+    
+    try:
+        kpi_clin = calculate_kpi_clinici(filtered_datastore)
+    except Exception as e:
+        st.error(f"❌ Errore calcolo KPI clinici: {e}")
+        kpi_clin = {'spettro_sintomi': {}, 'stratificazione_urgenza': {}, 
+                    'prevalenza_red_flags': 0, 'red_flags_dettaglio': {}}
+    
+    try:
+        kpi_ctx = calculate_kpi_context_aware(filtered_datastore)
+    except Exception as e:
+        st.error(f"❌ Errore calcolo KPI context-aware: {e}")
+        kpi_ctx = {'urgenza_media_per_spec': {}, 'tasso_deviazione_ps': 0, 
+                   'tasso_deviazione_territoriale': 0}
     
     # === SEZIONE 1: KPI VOLUMETRICI ===
     st.header("📈 KPI Volumetrici")
@@ -613,31 +733,44 @@ def main():
     
     st.divider()
     
-    # Throughput Orario
-    render_throughput_chart(kpi_vol)
+    # Throughput Orario (con gestione errori)
+    try:
+        render_throughput_chart(kpi_vol)
+    except Exception as e:
+        st.error(f"❌ Errore rendering throughput: {e}")
     
     # === SEZIONE 2: KPI CLINICI ===
-    st.header("🏥 KPI Clinici ed Epidemiologici")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.metric("Prevalenza Red Flags", f"{kpi_clin['prevalenza_red_flags']:.1f}%")
+    if show_all_kpis or any("Clinici" in kpi for kpi in selected_kpis):
+        st.header("🏥 KPI Clinici ed Epidemiologici")
         
-        # Red Flags Dettaglio
-        if kpi_clin['red_flags_dettaglio']:
-            st.subheader("🚨 Red Flags per Tipo")
-            rf_list = sorted(kpi_clin['red_flags_dettaglio'].items(), key=lambda x: x[1], reverse=True)
-            for rf, count in rf_list[:10]:
-                st.write(f"**{rf.title()}**: {count}")
-    
-    with col2:
-        render_urgenza_pie(kpi_clin)
-    
-    st.divider()
-    
-    # Spettro Sintomi Completo
-    render_sintomi_table(kpi_clin)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if show_all_kpis or "Clinici: Red Flags" in selected_kpis:
+                st.metric("Prevalenza Red Flags", f"{kpi_clin.get('prevalenza_red_flags', 0):.1f}%")
+                
+                # Red Flags Dettaglio
+                if kpi_clin.get('red_flags_dettaglio'):
+                    st.subheader("🚨 Red Flags per Tipo")
+                    rf_list = sorted(kpi_clin['red_flags_dettaglio'].items(), key=lambda x: x[1], reverse=True)
+                    for rf, count in rf_list[:10]:
+                        st.write(f"**{rf.title()}**: {count}")
+        
+        with col2:
+            if show_all_kpis or "Clinici: Stratificazione Urgenza" in selected_kpis:
+                try:
+                    render_urgenza_pie(kpi_clin)
+                except Exception as e:
+                    st.error(f"❌ Errore rendering urgenza: {e}")
+        
+        st.divider()
+        
+        # Spettro Sintomi Completo (con gestione errori)
+        if show_all_kpis or "Clinici: Spettro Sintomi" in selected_kpis:
+            try:
+                render_sintomi_table(kpi_clin)
+            except Exception as e:
+                st.error(f"❌ Errore rendering sintomi: {e}")
     
     # === SEZIONE 3: KPI CONTEXT-AWARE ===
     st.header("🎯 KPI Context-Aware")

@@ -139,7 +139,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
-    page_title="AI Health Navigator - Professional Triage",
+    page_title="SIRAYA Health Navigator",
     page_icon="🩺",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -153,24 +153,111 @@ if 'service_catalog' not in st.session_state:
         # Fallback se i file mancano
         st.session_state.service_catalog = ["Pronto Soccorso", "CAU", "Guardia Medica", "Farmacia"]
 
-# --- STILI CSS AVANZATI ---
+# --- STILI CSS SIRAYA BRAND ---
 st.markdown("""
 <style>
-    .main { background-color: #f0f2f6; }
-    .stButton>button { width: 100%; border-radius: 12px; height: 3.5em; font-weight: 600; transition: all 0.3s; }
-    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    /* SIRAYA Brand Colors: Blue (#4A90E2), White, Clean */
+    .main { background-color: #ffffff; }
+    
+    /* Professional Buttons */
+    .stButton>button { 
+        width: 100%; 
+        border-radius: 8px; 
+        height: 3em; 
+        font-weight: 500; 
+        transition: all 0.3s;
+        border: 1px solid #e5e7eb;
+    }
+    .stButton>button:hover { 
+        transform: translateY(-1px); 
+        box-shadow: 0 4px 12px rgba(74, 144, 226, 0.2);
+        border-color: #4A90E2;
+    }
+    
+    /* Emergency Banner */
     .emergency-banner { 
-        padding: 25px; background: linear-gradient(135deg, #ff4b4b 0%, #b91c1c 100%); 
-        color: white; border-radius: 15px; margin-bottom: 25px; box-shadow: 0 10px 20px rgba(185, 28, 28, 0.3);
+        padding: 25px; 
+        background: linear-gradient(135deg, #ff4b4b 0%, #b91c1c 100%); 
+        color: white; 
+        border-radius: 12px; 
+        margin-bottom: 25px; 
+        box-shadow: 0 10px 20px rgba(185, 28, 28, 0.3);
     }
+    
+    /* Disclaimer Box */
     .disclaimer-box {
-        padding: 20px; border: 2px solid #d1d5db; background-color: #ffffff;
-        border-radius: 12px; font-size: 0.95em; color: #1f2937; margin-bottom: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        padding: 20px; 
+        border: 1px solid #e5e7eb; 
+        background-color: #f9fafb;
+        border-radius: 8px; 
+        font-size: 0.9em; 
+        color: #374151; 
+        margin-bottom: 20px;
     }
-    .typing-indicator { color: #6b7280; font-size: 0.9em; font-style: italic; margin-bottom: 10px; }
-    .fade-in { animation: fadeIn 0.5s; }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    
+    /* Landing Page Styles */
+    .landing-container {
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 40px 20px;
+        text-align: center;
+    }
+    
+    .logo-container {
+        margin-bottom: 40px;
+    }
+    
+    .terms-box {
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 30px 0;
+        text-align: left;
+    }
+    
+    .accept-button {
+        background: #4A90E2 !important;
+        color: white !important;
+        font-size: 1.1em !important;
+        padding: 12px 40px !important;
+        border-radius: 8px !important;
+    }
+    
+    /* Chat Styles */
+    .typing-indicator { 
+        color: #6b7280; 
+        font-size: 0.9em; 
+        font-style: italic; 
+        margin-bottom: 10px; 
+    }
+    
+    .fade-in { 
+        animation: fadeIn 0.5s; 
+    }
+    
+    @keyframes fadeIn { 
+        from { opacity: 0; } 
+        to { opacity: 1; } 
+    }
+    
+    /* Triage Buttons - Hidden by default */
+    .triage-controls {
+        margin-top: 20px;
+        padding: 15px;
+        background: #f9fafb;
+        border-radius: 8px;
+        border: 1px solid #e5e7eb;
+    }
+    
+    /* Sidebar Styling */
+    .css-1d391kg { /* Sidebar */
+        background-color: #f9fafb;
+    }
+    
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -946,17 +1033,35 @@ def render_header(current_phase=None):
 
 def render_sidebar(pharmacy_db):
     with st.sidebar:
-        st.title("🛡️ Navigator Pro")
+        # SIRAYA Branding
+        st.markdown("""
+        <div style="text-align: center; padding: 20px 0;">
+            <div style="font-size: 2em; font-weight: 300; letter-spacing: 0.15em; color: #4A90E2;">
+                SIRAYA
+            </div>
+            <div style="font-size: 0.85em; color: #6b7280; margin-top: 5px;">
+                Health Navigator
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         
+        st.divider()
+        
+        # Professional buttons with icons
         if st.button("🔄 Nuova Sessione", use_container_width=True, key="sidebar_new_session"):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
+        
+        # Only show triage button if medical intent detected
+        if st.session_state.get('medical_intent_detected', False):
+            if st.button("📋 Modalità Triage", use_container_width=True, key="sidebar_triage_mode", type="primary"):
+                st.session_state.triage_mode_active = True
+                st.info("Modalità triage attivata")
             
-        if st.button("🆘 SOS - INVIA POSIZIONE", type="primary", use_container_width=True, key="sidebar_sos_gps"):
-            st.warning("Geolocalizzazione in corso...")
+        if st.button("🆘 Emergenza 118", use_container_width=True, key="sidebar_sos_gps"):
+            st.error("⚠️ PER EMERGENZE MEDICHE CHIAMARE IL 118")
             st.session_state.backend.sync({"event": "SOS_GPS_REQUEST"})
-            st.info("In caso di pericolo reale, chiama subito il 118.")
         
         st.divider()
         current_phase = PHASES[st.session_state.current_phase_idx]
@@ -2362,9 +2467,18 @@ def render_main_application():
         st.error("❌ Servizio AI offline. Riprova più tardi.")
         return
 
-    # STEP 4: Rendering cronologia messaggi con TTS opzionale
+    # STEP 4: Rendering cronologia messaggi con TTS opzionale e avatar SIRAYA
+    # Get SIRAYA bot avatar
+    try:
+        from ui_components import get_bot_avatar
+        bot_avatar = get_bot_avatar()
+    except ImportError:
+        bot_avatar = "🩺"
+    
     for i, m in enumerate(st.session_state.messages):
-        with st.chat_message(m["role"]):
+        # Use custom avatar for assistant messages
+        avatar = bot_avatar if m["role"] == "assistant" else None
+        with st.chat_message(m["role"], avatar=avatar):
             st.markdown(m["content"])
             
             if m["role"] == "assistant":
@@ -2404,14 +2518,29 @@ def render_main_application():
             logger.info("✅ Orchestrator configurato con chiavi API")
         
         # Input utente
-        if raw_input := st.chat_input("💬 Descrivi la situazione... "):
+        if raw_input := st.chat_input("Ciao, come posso aiutarti oggi?"):
             # 1. Sanificazione Input
             user_input = DataSecurity.sanitize_input(raw_input)
             
             # ============================================
-            # 🆕 FSM: CLASSIFICAZIONE PRIMO MESSAGGIO
+            # 🆕 MEDICAL INTENT DETECTION
             # ============================================
             is_first_message = len(st.session_state.messages) == 0
+            
+            # Detect medical intent on first message
+            if is_first_message:
+                try:
+                    from ui_components import detect_medical_intent
+                    st.session_state.medical_intent_detected = detect_medical_intent(user_input, orchestrator)
+                    if st.session_state.medical_intent_detected:
+                        logger.info("🩺 Medical intent detected - activating triage mode")
+                except ImportError:
+                    # Fallback: always assume medical intent
+                    st.session_state.medical_intent_detected = True
+            
+            # ============================================
+            # 🆕 FSM: CLASSIFICAZIONE PRIMO MESSAGGIO
+            # ============================================
             
             if FSM_ENABLED and is_first_message:
                 urgency_score = classify_initial_urgency_fsm(user_input)
@@ -2458,7 +2587,14 @@ def render_main_application():
             is_first = len(st.session_state. messages) == 1
             
             # 4. Generazione Risposta AI
-            with st.chat_message("assistant", avatar="🩺"):
+            # Get SIRAYA bot avatar
+            try:
+                from ui_components import get_bot_avatar
+                bot_avatar = get_bot_avatar()
+            except ImportError:
+                bot_avatar = "🩺"
+            
+            with st.chat_message("assistant", avatar=bot_avatar):
                 placeholder = st.empty()
                 typing = st.empty()
                 typing.markdown('<div class="typing-indicator">🔄 Analisi in corso...</div>', unsafe_allow_html=True)
@@ -2770,10 +2906,28 @@ def render_main_application():
         st.markdown("</div>", unsafe_allow_html=True)
 
 def main():
-    """Entry point principale che chiama render_main_application."""
+    """Entry point principale con landing page e triage condizionale."""
+    # Import UI components
+    try:
+        from ui_components import render_landing_page, detect_medical_intent, get_bot_avatar
+        UI_COMPONENTS_AVAILABLE = True
+    except ImportError:
+        UI_COMPONENTS_AVAILABLE = False
+        logger.warning("⚠️ ui_components.py non disponibile - usando UI legacy")
+    
+    # Landing Page Gate
+    if UI_COMPONENTS_AVAILABLE:
+        if not render_landing_page():
+            # User hasn't accepted terms yet
+            return
+    
+    # Initialize medical intent tracking
+    if 'medical_intent_detected' not in st.session_state:
+        st.session_state.medical_intent_detected = False
+    
+    # Main application
     render_main_application()
 
 
 if __name__ == "__main__":
-
     main()
