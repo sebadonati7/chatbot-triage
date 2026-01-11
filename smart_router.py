@@ -328,63 +328,118 @@ class SmartRouter:
                 "EMERGENZA: Chiama immediatamente il 118"
             )
         
-        # === PATH A: Fast-Track (max 3 questions) ===
+        # === PATH A: Fast-Triage (3-4 domande) ===
         if state.assigned_path == TriagePath.A:
+            # Skip location se già estratta da slot filling
             if not state.patient_info.location:
                 return (TriagePhase.LOCATION, "In quale comune ti trovi? (Risposta rapida)")
             
+            # Fast-Triage Domanda 1: Irradiazione dolore (se dolore toracico)
+            if state.clinical_data.chief_complaint and "dolore" in state.clinical_data.chief_complaint.lower():
+                if not state.clinical_data.red_flags or len(state.clinical_data.red_flags) == 0:
+                    return (TriagePhase.RED_FLAGS, "Il dolore si irradia al braccio o alla mascella? (Opzioni: SI / NO)")
+            
+            # Fast-Triage Domanda 2: Sintomo principale (se non già estratto)
             if not state.clinical_data.chief_complaint:
                 return (TriagePhase.CHIEF_COMPLAINT, "Descrivi brevemente il sintomo principale")
             
-            if not state.clinical_data.red_flags:
-                return (TriagePhase.RED_FLAGS, "Hai difficoltà a respirare o dolore al petto?")
+            # Fast-Triage Domanda 3: Red Flags (se non già completato)
+            if not state.clinical_data.red_flags or len(state.clinical_data.red_flags) == 0:
+                return (TriagePhase.RED_FLAGS, "Hai difficoltà a respirare o dolore al petto? (Opzioni: SI / NO)")
             
             # Path A completo → DISPOSITION
             return (TriagePhase.DISPOSITION, "Genero raccomandazione...")
         
-        # === PATH B: Mental Health (with consent) ===
+        # === PATH B: Salute Mentale (con consenso e valutazione rischio) ===
         elif state.assigned_path == TriagePath.B:
-            # Check consent first
+            # Fase 1: Consenso
             if not state.consent_given:
                 return (
-                    TriagePhase.INTENT_DETECTION,  # Special phase for consent
-                    "Per offrirti il supporto migliore, ho bisogno di raccogliere alcune "
-                    "informazioni sulla tua situazione. Sei d'accordo a continuare? (Sì/No)"
+                    TriagePhase.INTENT_DETECTION,
+                    "Mi sembra di capire che stai attraversando un momento difficile. "
+                    "Se sei d'accordo, vorrei farti alcune domande personali per capire come esserti utile. "
+                    "(Opzioni: ACCETTO / NO)"
                 )
             
-            if not state.patient_info.location:
-                return (TriagePhase.LOCATION, "In quale comune ti trovi?")
+            # Fase 2: Percorsi/Farmaci
+            if not state.clinical_data.medications and not hasattr(state.clinical_data, 'treatment_history'):
+                return (
+                    TriagePhase.ANAMNESIS,
+                    "Hai già intrapreso percorsi terapeutici o stai assumendo farmaci? (Input aperto)"
+                )
             
+            # Fase 3: Valutazione Rischio (usa protocolli KB)
+            if not state.clinical_data.red_flags or len(state.clinical_data.red_flags) == 0:
+                return (
+                    TriagePhase.RED_FLAGS,
+                    "Valutazione rischio: domande basate su protocolli Knowledge Base per confermare gravità o escluderla."
+                )
+            
+            # Fase 4: Location (per routing CSM/Consultorio)
+            if not state.patient_info.location:
+                return (TriagePhase.LOCATION, "In quale comune ti trovi? (Necessario per indirizzarti al servizio giusto)")
+            
+            # Fase 5: Età (per routing NPIA vs CSM)
             if not state.patient_info.age:
                 return (TriagePhase.DEMOGRAPHICS, "Quanti anni hai? (Necessario per indirizzarti al servizio giusto)")
             
-            if not state.clinical_data.chief_complaint:
-                return (TriagePhase.CHIEF_COMPLAINT, "Puoi dirmi cosa stai provando in questo momento?")
-            
-            # Path B completo → DISPOSITION
+            # Path B completo → DISPOSITION (CSM/Consultorio/NPIA)
             return (TriagePhase.DISPOSITION, "Genero raccomandazione...")
         
-        # === PATH C: Standard Protocol ===
+        # === PATH C: Standard Protocol (5-7 domande per Yellow/Green) ===
         else:
+            # Conta domande fatte (per limitare a 5-7)
+            question_count = 0
+            if state.patient_info.location:
+                question_count += 1
+            if state.clinical_data.chief_complaint:
+                question_count += 1
+            if state.clinical_data.pain_scale is not None:
+                question_count += 1
+            if state.clinical_data.red_flags and len(state.clinical_data.red_flags) > 0:
+                question_count += 1
+            if state.patient_info.age:
+                question_count += 1
+            if state.clinical_data.medications:
+                question_count += 1
+            
+            # Fase 1: Localizzazione
             if not state.patient_info.location:
                 return (TriagePhase.LOCATION, "In quale comune dell'Emilia-Romagna ti trovi?")
             
+            # Fase 2: Sintomo principale
             if not state.clinical_data.chief_complaint:
                 return (TriagePhase.CHIEF_COMPLAINT, "Qual è il sintomo che ti preoccupa?")
             
+            # Fase 3: Scala dolore (con opzioni 1-10)
             if state.clinical_data.pain_scale is None:
-                return (TriagePhase.PAIN_ASSESSMENT, "Scala da 1 (lieve) a 10 (insopportabile), quanto è intenso?")
+                return (
+                    TriagePhase.PAIN_ASSESSMENT,
+                    "In una scala da 1 a 10, quanto è forte il dolore? "
+                    "(Opzioni: 1-3 Lieve, 4-6 Moderato, 7-8 Forte, 9-10 Insopportabile)"
+                )
             
-            if not state.clinical_data.red_flags:
-                return (TriagePhase.RED_FLAGS, "Hai difficoltà a respirare o dolore al petto?")
+            # Fase 4-7: Triage adattivo (5-7 domande totali)
+            # Se question_count < 5, continua con domande basate su protocolli KB
+            if question_count < 5:
+                # Domande basate su protocolli Knowledge Base con opzioni A/B/C
+                if not state.clinical_data.red_flags or len(state.clinical_data.red_flags) == 0:
+                    return (
+                        TriagePhase.RED_FLAGS,
+                        "Domanda triage basata su protocolli KB (opzioni A/B/C). "
+                        "Se testo libero → medicalizza e rigenera 3 opzioni specifiche."
+                    )
             
-            if not state.patient_info.age:
-                return (TriagePhase.DEMOGRAPHICS, "Quanti anni hai?")
+            # Se question_count >= 5 ma < 7, continua solo se sintomi aggiuntivi
+            if question_count < 7:
+                # Anamnesi base
+                if not state.patient_info.age:
+                    return (TriagePhase.DEMOGRAPHICS, "Quanti anni hai?")
+                
+                if not state.clinical_data.medications:
+                    return (TriagePhase.ANAMNESIS, "Prendi farmaci regolarmente? (Opzioni A/B/C)")
             
-            if not state.clinical_data.medications:
-                return (TriagePhase.ANAMNESIS, "Prendi farmaci regolarmente?")
-            
-            # Path C completo → DISPOSITION
+            # Path C completo (5-7 domande) → DISPOSITION
             return (TriagePhase.DISPOSITION, "Genero raccomandazione...")
     
     # ========================================================================

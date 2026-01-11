@@ -2016,6 +2016,58 @@ def render_disposition_summary():
         'eta':  None
     }
     
+    # === GENERAZIONE AUTOMATICA SBAR ===
+    try:
+        from models import SBARReport
+        
+        # Costruisci SBAR dai dati raccolti (formato corretto)
+        sbar = SBARReport(
+            situation=f"Sintomo principale: {collected.get('CHIEF_COMPLAINT', 'Non specificato')}. "
+                     f"Intensità dolore: {collected.get('PAIN_SCALE', 'N/D')}/10. "
+                     f"Urgenza: {avg_urgency:.1f}/5.0",
+            background={
+                "età": collected.get('age', 'N/D'),
+                "localizzazione": collected.get('LOCATION', 'N/D'),
+                "red_flags": red_flags_display,
+                "sesso": collected.get('sex', 'N/D'),
+                "farmaci": collected.get('medications', 'Nessuno')
+            },
+            assessment=[
+                f"Triage completato dall'utente",
+                f"Livello di urgenza: {rec_urgency}",
+                f"Specializzazione suggerita: {specialization}",
+                f"Codice colore: {rec_color}"
+            ],
+            recommendation=f"Raccomandazione: {rec_type}. {rec_msg}"
+        )
+        
+        # Salva SBAR in session_state per export PDF
+        st.session_state.sbar_report = {
+            "situation": sbar.situation,
+            "background": sbar.background,
+            "assessment": ", ".join(sbar.assessment),
+            "recommendation": sbar.recommendation
+        }
+        logger.info("✅ SBAR generato automaticamente a fine triage")
+        
+        # Mostra SBAR in UI
+        st.markdown("### 📄 Report SBAR Clinico")
+        st.markdown(f"""
+        **S (Situation):** {sbar.situation}
+        
+        **B (Background):** Età: {sbar.background.get('età', 'N/D')}, 
+        Localizzazione: {sbar.background.get('localizzazione', 'N/D')}, 
+        Red Flags: {sbar.background.get('red_flags', 'Nessuno')}
+        
+        **A (Assessment):** {', '.join(sbar.assessment)}
+        
+        **R (Recommendation):** {sbar.recommendation}
+        """)
+        
+    except Exception as e:
+        logger.error(f"❌ Errore generazione SBAR: {e}")
+        st.warning("⚠️ Report SBAR non disponibile")
+    
     # === SEZIONE 3: RICERCA STRUTTURA CON CACHING ===
     if facility_type:
         st.markdown("### 📍 Struttura Più Vicina")
@@ -2501,12 +2553,17 @@ def render_main_application():
     # Inizializza il servizio farmacie
     pharmacy_db = PharmacyService()
 
-    # STEP 1: Consenso GDPR obbligatorio
-    if not st.session_state.get('privacy_accepted', False):
+    # STEP 1: Consenso unificato (gestito da render_landing_page in main())
+    # Questo check è ridondante se render_landing_page() è già chiamato in main()
+    # Manteniamo per compatibilità legacy, ma render_landing_page() ha priorità
+    if not st.session_state.get('privacy_accepted', False) and not st.session_state.get('terms_accepted', False):
+        # Se siamo qui, render_landing_page() non è stato chiamato o non ha funzionato
+        # Mostra fallback minimo
         st.markdown("### 📋 Benvenuto in SIRAYA")
         render_disclaimer()
         if st.button("✅ Accetto e Inizio Triage", type="primary", use_container_width=True, key="accept_gdpr_btn"):
             st.session_state.privacy_accepted = True
+            st.session_state.terms_accepted = True  # Sincronizza entrambi
             st.rerun()
         return
 
@@ -2884,6 +2941,52 @@ def render_main_application():
                 st.session_state. pending_survey = None
                 
                 if validation_success:
+                    # 🔧 FIX BUG PULSANTI: Invia risposta all'orchestratore per sincronizzare FSM
+                    try:
+                        current_phase = PHASES[st.session_state.current_phase_idx]
+                        phase_id = current_phase["id"]
+                        path = st.session_state.get('triage_path', 'C')
+                        
+                        # Chiama orchestratore per generare prossima risposta
+                        from bridge import stream_ai_response
+                        res_gen = stream_ai_response(
+                            orchestrator,
+                            st.session_state.messages,
+                            path,
+                            phase_id,
+                            collected_data=st.session_state.collected_data,
+                            is_first_message=False
+                        )
+                        
+                        # Consuma generatore per ottenere risposta
+                        ai_response = ""
+                        final_obj = None
+                        for chunk in res_gen:
+                            if isinstance(chunk, dict):
+                                final_obj = chunk
+                                ai_response = chunk.get("testo", "")
+                            elif isinstance(chunk, str):
+                                ai_response += chunk
+                            elif hasattr(chunk, 'model_dump'):
+                                final_obj = chunk.model_dump()
+                                ai_response = final_obj.get("testo", "")
+                        
+                        # Salva risposta AI in cronologia
+                        if ai_response:
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": ai_response
+                            })
+                            logger.info(f"✅ Risposta AI generata da pulsante: {len(ai_response)} caratteri")
+                        
+                        # Sincronizza metadati se presenti
+                        if final_obj and final_obj.get("metadata"):
+                            update_backend_metadata(final_obj["metadata"])
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Errore chiamata orchestratore da pulsante: {e}")
+                        # Continua comunque con avanzamento step
+                    
                     advance_step()
                     if st.session_state.current_phase_idx < len(PHASES) - 1:
                         st.session_state.current_phase_idx += 1
@@ -2911,7 +3014,39 @@ def render_main_application():
             step_name = current_step.name
             validation_success = False
             
-            # Validazione per step personalizzato
+            # 🔬 MEDICALIZZAZIONE: Se testo libero, medicalizza e rigenera opzioni A/B/C
+            if current_step in [TriageStep.CHIEF_COMPLAINT, TriageStep.RED_FLAGS, TriageStep.PAIN_SCALE, TriageStep.ANAMNESIS]:
+                try:
+                    # Medicalizza testo libero
+                    medicalized_options = orchestrator._medicalize_and_regenerate_options(
+                        val,
+                        current_step.name,
+                        st.session_state.collected_data
+                    )
+                    
+                    # Salva opzioni medicalizzate per prossima domanda
+                    st.session_state.pending_survey = {
+                        "opzioni": medicalized_options,
+                        "testo": f"Ho capito '{val}'. Per essere più preciso, quale di queste opzioni descrive meglio la tua situazione?",
+                        "tipo_domanda": "survey"
+                    }
+                    
+                    logger.info(f"🔬 Testo medicalizzato: '{val}' → Opzioni: {medicalized_options}")
+                    
+                    # Salva anche il dato originale
+                    st.session_state.collected_data[step_name] = val
+                    validation_success = True
+                    
+                    # Non avanzare step, ma mostra nuove opzioni medicalizzate
+                    st.session_state.show_altro = False
+                    st.rerun()
+                    return
+                    
+                except Exception as e:
+                    logger.error(f"❌ Errore medicalizzazione: {e}")
+                    # Continua con validazione normale
+            
+            # Validazione per step personalizzato (non medicalizzato)
             if current_step == TriageStep.LOCATION:
                 is_valid, normalized = InputValidator.validate_location(val)
                 if is_valid:

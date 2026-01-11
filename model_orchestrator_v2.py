@@ -777,6 +777,61 @@ Per CHIEF_COMPLAINT:
         yield fallback. testo
         yield fallback
 
+    def _medicalize_and_regenerate_options(self, free_text: str, phase: str, collected_data: Dict) -> List[str]:
+        """
+        Medicalizza testo libero e rigenera 3 opzioni A/B/C specifiche.
+        
+        Args:
+            free_text: Testo libero dell'utente
+            phase: Fase corrente
+            collected_data: Dati già raccolti
+        
+        Returns:
+            List[str]: 3 opzioni medicalizzate A/B/C
+        """
+        # Normalizza sintomo
+        normalized = self.symptom_normalizer.normalize(free_text)
+        
+        logger.info(f"🔬 Medicalizzazione: '{free_text}' → '{normalized}'")
+        
+        # Genera 3 opzioni basate su sintomo normalizzato
+        # Opzione A: Variante più grave
+        # Opzione B: Variante moderata (normalizzata)
+        # Opzione C: Variante lieve o "Nessuno"
+        
+        if phase == "CHIEF_COMPLAINT":
+            return [
+                f"{normalized} intenso/acuto",
+                f"{normalized} moderato",
+                f"{normalized} lieve o altro sintomo"
+            ]
+        elif phase == "RED_FLAGS":
+            return [
+                f"Sì, ho {normalized}",
+                f"{normalized} leggero",
+                "No, nessun sintomo critico"
+            ]
+        elif phase == "PAIN_ASSESSMENT":
+            # Estrai numero se presente
+            import re
+            numbers = re.findall(r'\d+', free_text)
+            if numbers:
+                pain_num = int(numbers[0])
+                if pain_num >= 7:
+                    return ["9-10 Insopportabile", "7-8 Forte", "4-6 Moderato"]
+                elif pain_num >= 4:
+                    return ["7-8 Forte", "4-6 Moderato", "1-3 Lieve"]
+                else:
+                    return ["4-6 Moderato", "1-3 Lieve", "Nessun dolore"]
+            return ["7-10 Forte/Insopportabile", "4-6 Moderato", "1-3 Lieve"]
+        else:
+            # Default: 3 opzioni generiche
+            return [
+                f"Sì, {normalized}",
+                f"{normalized} parziale",
+                "No, nessun problema"
+            ]
+    
     def _get_safe_fallback_response(self) -> TriageResponse:
         return TriageResponse(
             testo="Sto analizzando i dati raccolti. Potresti descrivere con più precisione come ti senti in questo momento?",

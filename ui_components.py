@@ -39,12 +39,40 @@ def inject_siraya_css():
     
     /* ==================== LAYOUT & BACKGROUND ==================== */
     .stApp {
-        background-color: #f8fafc;
+        background-color: #F5F5F5;
     }
     
     .main .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
+    }
+    
+    /* ==================== FIX CHAT OVERLAPPING ==================== */
+    .stChatMessage {
+        margin-bottom: 20px !important;
+        padding: 16px 20px !important;
+        border-radius: 12px !important;
+    }
+    
+    .stChatMessage[data-testid="user"] {
+        background-color: #ffffff;
+        border-left: 3px solid #e5e7eb;
+    }
+    
+    .stChatMessage[data-testid="assistant"] {
+        background-color: #fafafa;
+        border-left: 3px solid #d1d5db;
+    }
+    
+    /* Fix spacing between chat messages */
+    div[data-testid="stChatMessageContainer"] {
+        margin-bottom: 24px !important;
+    }
+    
+    /* Fix chat input spacing */
+    .stChatInput {
+        margin-top: 20px !important;
+        padding: 12px !important;
     }
     
     /* ==================== SIDEBAR ==================== */
@@ -130,14 +158,16 @@ def inject_siraya_css():
         box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3);
     }
     
-    /* Primary Button */
+    /* Primary Button - Grigio chiaro Siraya */
     .stButton > button[kind="primary"] {
-        background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
-        color: white;
+        background: linear-gradient(135deg, #F5F5F5 0%, #E5E5E5 100%);
+        color: #1f2937;
+        border: 1px solid #d1d5db;
     }
     
     .stButton > button[kind="primary"]:hover {
-        background: linear-gradient(135deg, #0891b2 0%, #0e7490 100%);
+        background: linear-gradient(135deg, #E5E5E5 0%, #D4D4D4 100%);
+        border-color: #9ca3af;
     }
     
     /* Secondary Button */
@@ -419,24 +449,18 @@ def render_chat_logo():
 
 def get_bot_avatar() -> str:
     """
-    Return bot avatar path (SIRAYA logo or fallback emoji).
+    Return bot avatar - "S" nera stilizzata.
     
     Returns:
-        str: Path to logo file or emoji character
+        str: Path to SVG file or fallback emoji
     """
-    logo_png_path = Path("siraya_logo.png")
-    logo_svg_path = Path("assets/logo.svg")
+    # Try to use SVG "S" nera stilizzata
+    svg_path = Path("assets/siraya_s_avatar.svg")
+    if svg_path.exists():
+        return str(svg_path)
     
-    # Prefer PNG for avatar
-    if logo_png_path.exists():
-        return str(logo_png_path)
-    
-    # Fallback to SVG
-    if logo_svg_path.exists():
-        return str(logo_svg_path)
-    
-    # Final fallback: emoji
-    return "🩺"
+    # Fallback: emoji "S" nera (black circle)
+    return "⚫"
 
 
 def detect_medical_intent(user_input: str, orchestrator=None) -> bool:
