@@ -1,7 +1,7 @@
-# CHATBOT.ALPHA v2 - Master Architecture Documentation
+# SIRAYA Health Navigator - Master Architecture Documentation
 **Data Creazione**: Gennaio 2026  
-**Versione**: 2.0  
-**Principio Architetturale**: Fat Frontend
+**Versione**: 3.0 (Architettura Monolitica)  
+**Principio Architetturale**: Monolitica con Entry Point Unificato
 
 ---
 
@@ -11,9 +11,10 @@
 
 | File | Porta | Ruolo | Dipendenze Critiche |
 |------|-------|-------|---------------------|
-| **frontend.py** | 8501 | Frontend principale - Logica clinica, UI, orchestrazione AI | streamlit, groq, models.py, bridge.py, model_orchestrator_v2.py |
-| **backend_api.py** | 5000 | REST API - Sincronizzazione sessioni cross-instance | flask, flask_cors, session_storage.py |
-| **backend.py** ✨ | 8502 | Analytics Dashboard - Visualizzazione statistiche triage (REWRITE V2) | streamlit, plotly.graph_objects, xlsxwriter (opt) |
+| **app.py** 🆕 | 8501 | Entry Point Monolitico - Selettore modalità (Chatbot/Analytics) | streamlit, frontend.py, backend.py |
+| **frontend.py** | N/A | Chatbot Triage - Logica clinica, UI, orchestrazione AI | streamlit, groq, models.py, bridge.py, model_orchestrator_v2.py |
+| **backend.py** ✨ | N/A | Analytics Dashboard - Visualizzazione statistiche triage (REWRITE V2) | streamlit, plotly.graph_objects, xlsxwriter (opt) |
+| ~~**backend_api.py**~~ | ❌ | ~~REST API~~ - **ELIMINATO** (Architettura Monolitica) | ~~flask, flask_cors~~ |
 | **bridge.py** | N/A | Modulo - Streaming AI-UI con context injection | model_orchestrator_v2.py, models.py |
 | **model_orchestrator_v2.py** | N/A | Orchestratore AI - Gestione multi-provider (Groq/OpenAI) | groq, openai |
 | **smart_router.py** | N/A | Router intelligente - Classificazione urgenza FSM | groq |
@@ -37,8 +38,8 @@
 
 | File | Stato | Azione |
 |------|-------|--------|
-| **avvia_tutto.bat** | ✅ Attivo | Script Windows per avvio simultaneo frontend/backend/API |
-| **unifica_dati.py** | ⚠️ Utility | Script one-time per merge KB → master_kb.json |
+| **avvia_tutto.bat** | ⚠️ Deprecato | Script Windows legacy (V3 usa solo app.py) |
+| **unifica_dati.py** | ❌ Eliminato | Script one-time (eseguito, non più necessario) |
 | **index.html** | ❓ Sconosciuto | Possibile landing page o documentazione |
 | **schema INTERAZIONI PZ.txt** | 📄 Doc | Documentazione flusso interazioni paziente |
 
@@ -46,12 +47,16 @@
 
 ## 2. SCHEMA DEI FLUSSI
 
-### 2.1 Flusso Triage Utente (Happy Path)
+### 2.1 Flusso Triage Utente (Happy Path) - Architettura Monolitica V3
 
 ```
-[Utente Browser] → http://localhost:8501 (frontend.py)
+[Utente Browser] → http://localhost:8501 (app.py)
      ↓
-1. Consenso GDPR → init_session() → session_id generato
+1. Selettore Modalità → st.sidebar.radio("🤖 Chatbot Triage" / "📈 Analytics Dashboard")
+     ↓
+2a. Modalità "Chatbot Triage" → import frontend → frontend.main()
+     ↓
+3. Consenso GDPR → init_session() → session_id generato
      ↓
 2. Input sintomi → DataSecurity.sanitize_input()
      ↓
@@ -74,22 +79,39 @@
 11. save_structured_log() → triage_logs.jsonl
 ```
 
-### 2.2 Flusso Sincronizzazione Sessioni
+### 2.2 Flusso Analytics Dashboard (V3 - Con Password Gate)
 
 ```
-[frontend.py] → BackendClient.sync(metadata)
+[Utente Browser] → http://localhost:8501 (app.py)
      ↓
-HTTP POST → http://localhost:5000/session/{session_id}
+1. Selettore Modalità → "📈 Analytics Dashboard"
      ↓
-[backend_api.py] → SessionStorage.save_session()
+2. Password Gate → st.sidebar.text_input(type="password")
      ↓
-sessions/{session_id}.json (persistenza disco)
+3. Verifica Password → st.secrets["BACKEND_PASSWORD"]
+     ↓
+4a. Password Corretta → st.session_state.authenticated = True → import backend → backend.main()
+4b. Password Errata → st.sidebar.error("❌ Accesso Negato") → st.stop()
+     ↓
+5. TriageDataStore(LOG_FILE) → Caricamento triage_logs.jsonl (local-first)
 ```
 
-### 2.3 Flusso Analytics
+### 2.3 Flusso Sincronizzazione Sessioni (V3 - Local-First)
 
 ```
-[Utente Browser] → http://localhost:8502 (backend.py)
+[frontend.py] → save_structured_log()
+     ↓
+Scrittura diretta → triage_logs.jsonl (persistenza locale)
+     ↓
+[Opzionale] → session_storage.save_session() → sessions/{session_id}.json
+```
+
+**Note V3**: 
+- ❌ **backend_api.py eliminato** - Architettura monolitica non richiede API separata
+- ✅ **Local-First**: I log vengono salvati direttamente in `triage_logs.jsonl`
+- ✅ **Password Gate**: Analytics Dashboard protetto da autenticazione
+
+### 2.4 Flusso Analytics (V3 - Local-First)
      ↓
 1. TriageDataStore(LOG_FILE) → Caricamento triage_logs.jsonl
      ↓
@@ -262,6 +284,7 @@ def load_secrets():
 | ~~test_context_aware.py~~ | ✅ Test one-time | **ELIMINATO** |
 | ~~test_crash.py~~ | ✅ Test diagnostico | **ELIMINATO** |
 | ~~unifica_dati.py~~ | ✅ Script one-time eseguito | **ELIMINATO** |
+| ~~backend_api.py~~ | ✅ API rimossa per architettura monolitica | **ELIMINATO V3** |
 | ~~index.html~~ | ✅ Landing page inutilizzata | **ELIMINATO** |
 | ~~sessions/test_diag.json~~ | ✅ File test diagnostico | **ELIMINATO** |
 | **knowledge_base/** | Duplicato in master_kb.json | ⚠️ Verificare e rimuovere |
@@ -365,42 +388,47 @@ openai>=1.0.0  # Provider AI alternativo
 
 ## 9. PROCEDURE DEPLOYMENT
 
-### 9.1 Avvio Locale (Windows)
+### 9.1 Avvio Locale (Windows) - V3 Monolitico
 
 ```batch
-# Doppio click su avvia_tutto.bat
-# Oppure manuale:
-start cmd /k "cd /d %~dp0 && python backend_api.py"
-timeout /t 2
-start cmd /k "cd /d %~dp0 && streamlit run frontend.py --server.port 8501"
-start cmd /k "cd /d %~dp0 && streamlit run backend.py --server.port 8502"
+# V3: Unico comando per entrambe le modalità
+streamlit run app.py --server.port 8501
 ```
 
-### 8.2 Avvio Produzione (Linux)
+**Note V3**: 
+- ✅ Non è più necessario avviare backend_api.py
+- ✅ Selettore modalità nella sidebar: "🤖 Chatbot Triage" / "📈 Analytics Dashboard"
+- ✅ Password Gate per Analytics Dashboard
+
+### 8.2 Avvio Produzione (Linux) - V3 Monolitico
 
 ```bash
-# Backend API
-nohup python backend_api.py > logs/api.log 2>&1 &
-
-# Frontend
-nohup streamlit run frontend.py --server.port 8501 --server.address 0.0.0.0 > logs/frontend.log 2>&1 &
-
-# Analytics
-nohup streamlit run backend.py --server.port 8502 --server.address 0.0.0.0 > logs/analytics.log 2>&1 &
+# V3: Unico processo per entrambe le modalità
+nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 > logs/siraya.log 2>&1 &
 ```
+
+**Note V3**: 
+- ✅ Architettura monolitica: un solo processo Streamlit
+- ✅ Selettore modalità nella sidebar
+- ✅ Password Gate per Analytics Dashboard (st.secrets["BACKEND_PASSWORD"])
 
 ### 8.3 Verifica Salute Sistema
 
 ```bash
-# Check porte
-netstat -an | grep -E "8501|8502|5000"
+# Check porta V3
+netstat -an | grep 8501
 
-# Check processi
-ps aux | grep -E "streamlit|python.*backend"
+# Check processi V3
+ps aux | grep "streamlit.*app.py"
 
-# Check logs
-tail -f logs/*.log
+# Check logs V3
+tail -f logs/siraya.log
 ```
+
+**Note V3**: 
+- ✅ Porta unica: 8501 (non più 8502 per analytics)
+- ✅ Processo unico: `streamlit run app.py`
+- ✅ Log unificato: `logs/siraya.log`
 
 ---
 
@@ -506,11 +534,87 @@ BACKEND_API_KEY = "your-secret-key"
 - **Robustezza**: ID collisioni → 0% (atomic generation)
 - **Coverage KPI**: 3 categorie × 15+ metriche totali
 
-## 12. ROADMAP v3 (Q2 2026)
+## 12. ARCHITETTURA V3 - MONOLITICA (Gennaio 2026) ✨
+
+### 12.1 Transizione Monolitica
+
+**Principio**: Entry Point Unificato (`app.py`) con selettore modalità
+
+**Componenti V3**:
+- ✅ **app.py**: Entry point monolitico con `st.sidebar.radio()` per selezionare modalità
+  - Modalità "🤖 Chatbot Triage" → `import frontend → frontend.main()`
+  - Modalità "📈 Analytics Dashboard" → Password Gate → `import backend → backend.main()`
+- ❌ **backend_api.py**: Eliminato (non più necessario con architettura locale)
+- ✅ **Local-First**: I log vengono salvati direttamente in `triage_logs.jsonl` (non più via API)
+
+### 12.2 Password Gate per Analytics Dashboard
+
+**Sicurezza**:
+- Password salvata in `.streamlit/secrets.toml` come `BACKEND_PASSWORD`
+- Verifica tramite `st.sidebar.text_input(type="password")`
+- Se password errata → `st.sidebar.error("❌ Accesso Negato")` + `st.stop()`
+- Se password corretta → `st.session_state.authenticated = True` + caricamento backend
+
+**Implementazione**:
+```python
+# In app.py
+def check_backend_authentication():
+    if st.session_state.get("authenticated", False):
+        return True
+    
+    password = st.sidebar.text_input("Password di Accesso", type="password")
+    backend_password = st.secrets.get("BACKEND_PASSWORD", "")
+    
+    if password == backend_password:
+        st.session_state.authenticated = True
+        return True
+    else:
+        st.sidebar.error("❌ Accesso Negato: Password errata")
+        return False
+```
+
+### 12.3 UI/UX Improvements V3
+
+**Colori Sidebar**:
+- ✅ Expander e box evidenziati: **Bianco/Panna** (#FDFCF0) con testo scuro (#1e293b)
+- ✅ Background sidebar: Mantenuto scuro (#1e293b) per contrasto
+
+**CSS Update**:
+- `.streamlit-expanderHeader`: background-color #FDFCF0
+- `.streamlit-expanderContent`: background-color #FDFCF0
+- `[data-testid="stSidebar"] [data-testid="stAlert"]`: background-color #FDFCF0
+- Metric container: background-color #FDFCF0
+
+### 12.4 Fix Critici V3
+
+1. **save_structured_log()**: Salva direttamente in `triage_logs.jsonl` (local-first)
+2. **send_triage_to_backend()**: Funzione deprecata (non più necessaria)
+3. **\_last_storage_sync**: Inizializzato a `0` invece di `None` (fix TypeError)
+4. **Sidebar Crash**: Inizializzazione corretta componenti per evitare crash all'apertura
+
+### 12.5 Deployment V3
+
+**Avvio Locale**:
+```bash
+# Unico comando per entrambe le modalità
+streamlit run app.py --server.port 8501
+```
+
+**Secrets Setup**:
+```toml
+# .streamlit/secrets.toml
+BACKEND_PASSWORD = "inserisci_qui_la_tua_password"
+```
+
+**Note**: Non è più necessario avviare backend_api.py separatamente
+
+---
+
+## 13. ROADMAP v4 (Q2 2026)
 
 1. **Microservizi**: Separazione AI orchestrator in servizio standalone (Docker/Kubernetes)
 2. **Database**: Migrazione da JSONL a PostgreSQL con TimescaleDB per analytics
-3. **Auth**: Sistema autenticazione utenti (OAuth2 + JWT)
+3. **Auth**: Sistema autenticazione utenti avanzato (OAuth2 + JWT)
 4. **Mobile**: App React Native per pazienti con push notifications
 5. **ML**: Modello predittivo urgenza custom-trained (scikit-learn/XGBoost)
 6. **Real-time Dashboard**: WebSocket per aggiornamenti live analytics

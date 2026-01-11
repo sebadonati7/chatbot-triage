@@ -1427,25 +1427,35 @@ def save_structured_log():
             except Exception as e:
                 logger.error(f"❌ Session sync failed: {e}")
         
-        # 🆕 V2: SYNC TO BACKEND API
-        try:
-            send_triage_to_backend(log_entry, clinical_summary, outcome)
-        except Exception as e:
-            logger.error(f"❌ Backend sync failed: {e}")
-            # Non blocchiamo il flusso se il backend è offline
+        # 🆕 V2: SYNC TO BACKEND API (DISABILITATO: Passato a architettura monolitica)
+        # Il log viene già salvato direttamente in triage_logs.jsonl (linea 1417-1418)
+        # Non è più necessario inviare a backend_api.py (eliminato per architettura monolitica)
+        # logger.info("✅ Log salvato direttamente in triage_logs.jsonl (architettura locale)")
     
     except Exception as e:
         logger.error(f"Errore salvataggio log: {e}")
 
 
+# ⚠️ DEPRECATED: Funzione rimossa per architettura monolitica
+# I log vengono salvati direttamente in triage_logs.jsonl (linea 1417-1418)
+# Non è più necessario inviare a backend_api.py (eliminato per architettura monolitica)
 def send_triage_to_backend(log_entry: dict, clinical_summary: dict, outcome: dict):
     """
-    Send completed triage data to backend API for reporting (NEW FOR V2).
+    [DEPRECATED] Send completed triage data to backend API for reporting.
+    
+    Questa funzione è stata disabilitata con la transizione all'architettura monolitica.
+    I log vengono salvati direttamente in triage_logs.jsonl (local-first).
     
     Args:
         log_entry: Complete log entry with all session data
         clinical_summary: Clinical data summary
         outcome: Disposition outcome data
+    """
+    # Funzione disabilitata - non fa nulla
+    logger.info("⚠️ send_triage_to_backend() deprecata - log salvato direttamente in JSONL")
+    return
+    
+    # Codice originale commentato per riferimento
     """
     try:
         # Get backend configuration from secrets
@@ -1534,6 +1544,7 @@ def send_triage_to_backend(log_entry: dict, clinical_summary: dict, outcome: dic
     except Exception as e:
         logger.error(f"❌ Error sending to backend: {e}")
         # Don't raise - we don't want to break the user flow
+    """
 
 
 # ============================================
@@ -2456,13 +2467,13 @@ def init_session():
         
         # --- 8. SESSION STORAGE INTEGRATION (NUOVO) ---
         st.session_state._storage_sync_enabled = SESSION_STORAGE_ENABLED
-        st.session_state._last_storage_sync = None
+        st.session_state._last_storage_sync = 0  # Fix: Inizializza a 0 invece di None per evitare TypeError
         
         logger.info(f"Sessione Advanced inizializzata: {st.session_state.session_id}")
     
     # --- 9. TENTATIVO DI CARICAMENTO DA STORAGE (NUOVO) ---
     # Se è attivato il session storage e la sessione è nuova, cerca di recuperare
-    if SESSION_STORAGE_ENABLED and st.session_state.get('_last_storage_sync') is None:
+    if SESSION_STORAGE_ENABLED and st.session_state.get('_last_storage_sync', 0) == 0:
         # Controlla se c'è un session_id nei query params per cross-instance sync
         try:
             # Try new API first (Streamlit >= 1.30)

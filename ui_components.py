@@ -90,6 +90,58 @@ def inject_siraya_css():
         color: #ffffff !important;
     }
     
+    /* ==================== SIDEBAR: COLORI BIANCO/PANNA PER EXPANDER E BOX ==================== */
+    /* Expander Header e Content - Bianco/Panna */
+    .streamlit-expanderHeader {
+        background-color: #FDFCF0 !important;
+        color: #1e293b !important;
+        border-radius: 8px !important;
+        padding: 12px !important;
+        margin-bottom: 8px !important;
+    }
+    
+    .streamlit-expanderContent {
+        background-color: #FDFCF0 !important;
+        color: #1e293b !important;
+        border-radius: 8px !important;
+        padding: 16px !important;
+    }
+    
+    /* Alert Box evidenziati - Bianco/Panna */
+    [data-testid="stSidebar"] [data-testid="stAlert"] {
+        background-color: #FDFCF0 !important;
+        color: #1e293b !important;
+        border-left: 4px solid #06b6d4 !important;
+    }
+    
+    /* Metric Container - Bianco/Panna */
+    [data-testid="stSidebar"] [data-testid="stMetricContainer"] {
+        background-color: #FDFCF0 !important;
+        color: #1e293b !important;
+        border-radius: 8px !important;
+        padding: 12px !important;
+    }
+    
+    /* Info Box - Bianco/Panna */
+    [data-testid="stSidebar"] .stInfo {
+        background-color: #FDFCF0 !important;
+        color: #1e293b !important;
+    }
+    
+    /* Warning Box - Bianco/Panna con bordo arancione */
+    [data-testid="stSidebar"] .stWarning {
+        background-color: #FDFCF0 !important;
+        color: #1e293b !important;
+        border-left: 4px solid #ff9800 !important;
+    }
+    
+    /* Error Box - Bianco/Panna con bordo rosso */
+    [data-testid="stSidebar"] .stError {
+        background-color: #FDFCF0 !important;
+        color: #1e293b !important;
+        border-left: 4px solid #ef4444 !important;
+    }
+    
     /* ==================== METRIC CARDS ==================== */
     .metric-card {
         background: white;
