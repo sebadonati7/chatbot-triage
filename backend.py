@@ -36,6 +36,15 @@ except ImportError:
 # === COSTANTI ===
 LOG_FILE = "triage_logs.jsonl"
 DISTRICTS_FILE = "distretti_sanitari_er.json"
+def load_json_file(filepath: str) -> Dict:
+    """Caricamento sicuro dei file JSON."""
+    if not os.path.exists(filepath):
+        return {}
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 # === MAPPATURE CLINICHE ===
 RED_FLAGS_KEYWORDS = [
@@ -621,15 +630,14 @@ def main():
     # Estrai distretti disponibili dal mapping
     available_districts = []
     if district_data and 'health_districts' in district_data:
-        available_districts = [d['name'] for d in district_data['health_districts']]
+        for ausl_item in district_data['health_districts']:
+            if 'districts' in ausl_item:
+                for d in ausl_item['districts']:
+                    if 'name' in d:
+                        available_districts.append(d['name'])
     
-    sel_district = st.sidebar.selectbox(
-        "Distretto",
-        ['Tutti'] + sorted(available_districts),
-        key="district_filter"
-    )
-    sel_district = None if sel_district == 'Tutti' else sel_district
-    
+    available_districts = sorted(list(set(available_districts)))
+
     # Filtro Comune (per compatibilità)
     comuni = datastore.get_unique_values('comune')
     sel_comune = st.sidebar.selectbox("Comune", ['Tutti'] + sorted([c for c in comuni if c])) if comuni else 'Tutti'
