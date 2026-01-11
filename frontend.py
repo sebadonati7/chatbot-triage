@@ -153,11 +153,13 @@ if 'service_catalog' not in st.session_state:
         # Fallback se i file mancano
         st.session_state.service_catalog = ["Pronto Soccorso", "CAU", "Guardia Medica", "Farmacia"]
 
-# --- STILI CSS SIRAYA BRAND ---
+# --- STILI CSS SIRAYA BRAND (Inject via UI Components) ---
+# CSS is now injected via ui_components.inject_siraya_css() in main()
+# Keeping minimal overrides here if needed
 st.markdown("""
 <style>
-    /* SIRAYA Brand Colors: Blue (#4A90E2), White, Clean */
-    .main { background-color: #ffffff; }
+    /* Minimal legacy overrides - main theme in ui_components.py */
+    .main { background-color: #f8fafc; }
     
     /* Professional Buttons */
     .stButton>button { 
@@ -1016,7 +1018,7 @@ def render_header(current_phase=None):
     # Render HTML centrato e pulito
     st.markdown(f"""
     <div style='text-align: center; margin: 10px 0 25px 0; font-family: sans-serif;'>
-        <h2 style='color: #1f2937; margin: 0; font-size: 1.8em;'>🩺 AI Health Navigator</h2>
+        <h2 style='color: #1f2937; margin: 0; font-size: 1.8em;'>🩺 SIRAYA Health Navigator</h2>
         <div style='margin-top: 10px;'>
             <span style='background-color: #f3f4f6; color: #4b5563; padding: 6px 16px; 
                          border-radius: 25px; font-size: 0.95em; font-weight: 600;
@@ -1040,7 +1042,7 @@ def render_sidebar(pharmacy_db):
                 SIRAYA
             </div>
             <div style="font-size: 0.85em; color: #6b7280; margin-top: 5px;">
-                Health Navigator
+                SIRAYA Health Navigator
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1225,7 +1227,7 @@ def render_disclaimer():
         <div style='background-color: #fff3cd; padding: 20px; border-radius: 10px; border-left: 5px solid #ffc107; margin-bottom: 20px;'>
             <h4 style='margin-top:0; color: #856404;'>📄 CONSENSO INFORMATO E PRIVACY</h4>
             <p style='font-size: 0.9em; color: #856404;'>
-                Benvenuto in <b>AI Health Navigator</b>. Per procedere, è necessario accettare i seguenti termini:
+                Benvenuto in <b>SIRAYA Health Navigator</b>. Per procedere, è necessario accettare i seguenti termini:
             </p>
             <ul style='font-size: 0.85em; color: #856404;'>
                 <li><b>Finalità:</b> Il sistema effettua un <b>Triage digitale</b> per orientarti verso la struttura corretta. <b>Non fornisce diagnosi né terapie.</b></li>
@@ -2143,6 +2145,56 @@ def render_disposition_summary():
             save_structured_log()
             st.success("✅ Dati salvati. Puoi chiudere la finestra.")
     
+    # === PDF EXPORT ===
+    st.divider()
+    st.markdown("### 📄 Esporta Report")
+    
+    col_pdf1, col_pdf2 = st.columns(2)
+    
+    with col_pdf1:
+        try:
+            from pdf_exporter import export_to_pdf_streamlit, is_pdf_available, get_pdf_not_available_message
+            
+            if is_pdf_available():
+                if st.button("📄 Scarica Report PDF", type="secondary", use_container_width=True, key="download_pdf_btn"):
+                    pdf_bytes = export_to_pdf_streamlit(st.session_state)
+                    
+                    if pdf_bytes:
+                        session_id = st.session_state.get('session_id', 'unknown')
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+                        filename = f"siraya_triage_{session_id}_{timestamp}.pdf"
+                        
+                        st.download_button(
+                            label="⬇️ Download PDF",
+                            data=pdf_bytes,
+                            file_name=filename,
+                            mime="application/pdf",
+                            key="pdf_download_final",
+                            use_container_width=True
+                        )
+                        st.success("✅ Report PDF generato!")
+                    else:
+                        st.error("❌ Errore nella generazione del PDF.")
+            else:
+                st.button(
+                    "📄 PDF Non Disponibile",
+                    use_container_width=True,
+                    disabled=True,
+                    key="pdf_unavailable_btn",
+                    help=get_pdf_not_available_message()
+                )
+        except ImportError:
+            st.button(
+                "📄 PDF Non Disponibile",
+                use_container_width=True,
+                disabled=True,
+                key="pdf_import_error_btn",
+                help="Modulo pdf_exporter non disponibile"
+            )
+    
+    with col_pdf2:
+        st.caption("Il report include SBAR clinico, livello di urgenza e raccomandazioni.")
+    
     # === SEZIONE 5: PULSANTI D'AZIONE (HANDOVER CLINICO) ===
     st.divider()
     st.markdown("### 📱 Azioni di Supporto (In Sviluppo)")
@@ -2451,7 +2503,7 @@ def render_main_application():
 
     # STEP 1: Consenso GDPR obbligatorio
     if not st.session_state.get('privacy_accepted', False):
-        st.markdown("### 📋 Benvenuto in Health Navigator")
+        st.markdown("### 📋 Benvenuto in SIRAYA")
         render_disclaimer()
         if st.button("✅ Accetto e Inizio Triage", type="primary", use_container_width=True, key="accept_gdpr_btn"):
             st.session_state.privacy_accepted = True
@@ -2909,17 +2961,30 @@ def main():
     """Entry point principale con landing page e triage condizionale."""
     # Import UI components
     try:
-        from ui_components import render_landing_page, detect_medical_intent, get_bot_avatar
+        from ui_components import (
+            render_landing_page,
+            render_chat_logo,
+            inject_siraya_css,
+            detect_medical_intent,
+            get_bot_avatar,
+            get_chat_placeholder
+        )
         UI_COMPONENTS_AVAILABLE = True
     except ImportError:
         UI_COMPONENTS_AVAILABLE = False
         logger.warning("⚠️ ui_components.py non disponibile - usando UI legacy")
     
-    # Landing Page Gate
+    # Landing Page Gate (Single Consent Flow)
     if UI_COMPONENTS_AVAILABLE:
         if not render_landing_page():
             # User hasn't accepted terms yet
             return
+        
+        # Inject SIRAYA CSS Theme (Medical Professional)
+        inject_siraya_css()
+        
+        # Render small logo in chat interface
+        render_chat_logo()
     
     # Initialize medical intent tracking
     if 'medical_intent_detected' not in st.session_state:

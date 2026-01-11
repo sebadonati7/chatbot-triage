@@ -669,6 +669,24 @@ def main():
         except Exception as e:
             st.sidebar.error(f"❌ Errore export Excel: {e}")
     
+    # === INJECT SIRAYA CSS ===
+    try:
+        from ui_components import inject_siraya_css
+        inject_siraya_css()
+    except ImportError:
+        # Fallback CSS if ui_components not available
+        st.markdown("""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        * { font-family: 'Inter', sans-serif !important; }
+        .stApp { background-color: #f8fafc; }
+        section[data-testid="stSidebar"] { background-color: #1e293b !important; }
+        section[data-testid="stSidebar"] * { color: #e2e8f0 !important; }
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        </style>
+        """, unsafe_allow_html=True)
+    
     # === MAIN DASHBOARD ===
     st.title("🧬 SIRAYA Analytics | Dashboard Professionale")
     st.caption(f"📊 Dati: {len(filtered_datastore.records)} interazioni | {len(filtered_datastore.sessions)} sessioni")
@@ -676,6 +694,75 @@ def main():
     if not filtered_datastore.records:
         st.info("ℹ️ Nessun dato disponibile per i filtri selezionati.")
         return
+    
+    # === LIVE CRITICAL ALERTS ===
+    st.markdown("### 🚨 Live Critical Alerts")
+    
+    # Get records from last hour
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    one_hour_ago = now - timedelta(hours=1)
+    
+    critical_records = []
+    for record in datastore.records:
+        try:
+            ts_str = record.get('timestamp', '')
+            # Parse ISO timestamp
+            if ts_str:
+                # Handle different timestamp formats
+                if 'T' in ts_str:
+                    ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                else:
+                    ts = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                
+                if ts >= one_hour_ago:
+                    urgency_level = record.get('urgency_level', '').upper()
+                    if urgency_level in ['ROSSO', 'ARANCIONE', 'RED', 'ORANGE']:
+                        critical_records.append({
+                            'timestamp': ts,
+                            'session_id': record.get('session_id', 'N/D'),
+                            'urgency': urgency_level,
+                            'comune': record.get('comune', 'N/D'),
+                            'chief_complaint': record.get('chief_complaint', 'N/D')[:100]
+                        })
+        except Exception:
+            continue
+    
+    if critical_records:
+        # Sort by timestamp (most recent first)
+        critical_records.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        # Display in alert box
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); 
+                    border-left: 4px solid #dc2626; 
+                    border-radius: 12px; 
+                    padding: 20px; 
+                    margin-bottom: 20px;
+                    box-shadow: 0 2px 8px rgba(220, 38, 38, 0.1);'>
+            <h4 style='margin: 0 0 10px 0; color: #991b1b;'>
+                ⚠️ {len(critical_records)} Casi Critici (Ultima Ora)
+            </h4>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Show details in expander
+        with st.expander("📋 Dettagli Casi Critici", expanded=False):
+            for i, rec in enumerate(critical_records[:10], 1):  # Max 10 most recent
+                ts_str = rec['timestamp'].strftime('%H:%M:%S')
+                urgency_emoji = "🔴" if rec['urgency'] in ['ROSSO', 'RED'] else "🟠"
+                
+                st.markdown(f"""
+                **{urgency_emoji} Caso {i}** - {ts_str}  
+                - **Sessione**: `{rec['session_id']}`  
+                - **Comune**: {rec['comune']}  
+                - **Sintomo**: {rec['chief_complaint']}...
+                """)
+                st.divider()
+    else:
+        st.success("✅ Nessun caso critico nell'ultima ora")
+    
+    st.markdown("---")
     
     # === KPI SELECTOR (Multiselect) ===
     st.sidebar.divider()

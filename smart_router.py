@@ -628,3 +628,290 @@ def detect_emergency_keywords(user_message: str) -> str:
             return "ORANGE"
     
     return "GREEN"
+
+
+# ============================================================================
+# INFORMATIONAL QUERY HANDLER
+# ============================================================================
+
+def answer_info_query(query: str, kb_path: str = "master_kb.json") -> str:
+    """
+    Answer informational queries by interrogating master_kb.json.
+    Handles queries about hours, locations, services, contact info.
+    
+    Args:
+        query: User's informational query
+        kb_path: Path to knowledge base
+    
+    Returns:
+        str: Answer to the query or error message
+    
+    Example:
+        >>> answer = answer_info_query("orari farmacie Bologna")
+        >>> "Farmacie a Bologna: ..." in answer
+        True
+    """
+    query_lower = query.lower().strip()
+    logger.info(f"📋 Handling INFO query: '{query}'")
+    
+    # Load knowledge base
+    try:
+        with open(kb_path, 'r', encoding='utf-8') as f:
+            kb = json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load KB: {e}")
+        return "Mi dispiace, non riesco ad accedere alle informazioni in questo momento."
+    
+    facilities = kb.get("facilities", [])
+    
+    # === QUERY TYPE DETECTION ===
+    
+    # Pharmacy queries
+    if "farmaci" in query_lower or "farmacia" in query_lower:
+        pharmacies = [f for f in facilities if f.get("tipologia") == "Farmacia"]
+        
+        if not pharmacies:
+            return "Non ho informazioni sulle farmacie al momento."
+        
+        # Extract location if present
+        location_match = None
+        for facility in pharmacies:
+            comune = facility.get("comune", "").lower()
+            if comune and comune in query_lower:
+                location_match = comune
+                break
+        
+        if location_match:
+            # Filter by location
+            local_pharmacies = [f for f in pharmacies if f.get("comune", "").lower() == location_match]
+            
+            if not local_pharmacies:
+                return f"Non ho trovato farmacie a {location_match.title()}."
+            
+            response = f"**Farmacie a {location_match.title()}:**\n\n"
+            for i, pharm in enumerate(local_pharmacies[:5], 1):  # Max 5 results
+                name = pharm.get("nome", "N/D")
+                address = pharm.get("indirizzo", "N/D")
+                phone = pharm.get("telefono", "N/D")
+                hours = pharm.get("orari", "N/D")
+                
+                response += f"{i}. **{name}**\n"
+                response += f"   - Indirizzo: {address}\n"
+                response += f"   - Telefono: {phone}\n"
+                if hours and hours != "N/D":
+                    response += f"   - Orari: {hours}\n"
+                response += "\n"
+            
+            return response
+        else:
+            # General pharmacy info
+            return f"Ho informazioni su {len(pharmacies)} farmacie. Per favore specifica il comune (es. Bologna, Modena, etc.)."
+    
+    # Emergency department queries
+    if "pronto soccorso" in query_lower or "ps" in query_lower:
+        ps_list = [f for f in facilities if f.get("tipologia") == "Pronto Soccorso"]
+        
+        if not ps_list:
+            return "Non ho informazioni sui Pronto Soccorso al momento."
+        
+        response = f"**Pronto Soccorso in Emilia-Romagna** ({len(ps_list)} strutture):\n\n"
+        for i, ps in enumerate(ps_list[:10], 1):
+            name = ps.get("nome", "N/D")
+            comune = ps.get("comune", "N/D")
+            response += f"{i}. {name} - {comune}\n"
+        
+        response += "\n💡 Per emergenze, chiama sempre il **118**."
+        return response
+    
+    # CAU queries
+    if "cau" in query_lower or "continuità assistenziale" in query_lower:
+        cau_list = [f for f in facilities if f.get("tipologia") == "CAU"]
+        
+        if not cau_list:
+            return "Non ho informazioni sui CAU (Centri di Assistenza e Urgenza) al momento."
+        
+        response = f"**CAU - Centri di Assistenza e Urgenza** ({len(cau_list)} strutture):\n\n"
+        for i, cau in enumerate(cau_list[:10], 1):
+            name = cau.get("nome", "N/D")
+            comune = cau.get("comune", "N/D")
+            phone = cau.get("telefono", "N/D")
+            response += f"{i}. {name} - {comune}"
+            if phone and phone != "N/D":
+                response += f" (Tel: {phone})"
+            response += "\n"
+        
+        return response
+    
+    # Hours query
+    if "orari" in query_lower or "orario" in query_lower or "aperto" in query_lower:
+        return (
+            "Gli orari variano per tipo di struttura:\n\n"
+            "- **Pronto Soccorso**: H24, 7 giorni su 7\n"
+            "- **CAU**: Solitamente 8:00-20:00, alcuni H24\n"
+            "- **Farmacie**: Variabile, alcune con turni notturni\n"
+            "- **MMG**: Solitamente su appuntamento, orari variabili\n\n"
+            "Per informazioni specifiche, indica la struttura e il comune."
+        )
+    
+    # Contact/phone queries
+    if "telefono" in query_lower or "numero" in query_lower or "contatto" in query_lower:
+        return (
+            "**Numeri Utili Emilia-Romagna:**\n\n"
+            "- **118**: Emergenza sanitaria\n"
+            "- **116117**: Guardia Medica\n"
+            "- **CUP Regionale**: 800 884 888\n\n"
+            "Per contatti specifici di una struttura, indica nome e comune."
+        )
+    
+    # Default response
+    return (
+        "Posso aiutarti con informazioni su:\n"
+        "- 🏥 Pronto Soccorso e CAU\n"
+        "- 💊 Farmacie e turni\n"
+        "- 📞 Numeri utili e contatti\n"
+        "- 🕐 Orari delle strutture\n\n"
+        "Cosa ti serve sapere?"
+    )
+
+
+# ============================================================================
+# SLOT FILLING - Automatic Entity Extraction
+# ============================================================================
+
+def extract_slots_from_text(text: str) -> Dict[str, any]:
+    """
+    Automatic slot filling from user text.
+    Extracts: location (comune), symptoms, age, pain scale.
+    
+    Args:
+        text: User's message
+    
+    Returns:
+        Dict with extracted slots (keys match TriageState fields)
+    
+    Example:
+        >>> slots = extract_slots_from_text("Ho mal di pancia e sono a Forlì, ho 35 anni")
+        >>> slots
+        {'location': 'Forlì', 'symptoms': ['mal di pancia'], 'age': 35}
+    """
+    text_lower = text.lower().strip()
+    extracted = {}
+    
+    logger.info(f"🔍 Extracting slots from: '{text}'")
+    
+    # === EXTRACT LOCATION (Comuni Emilia-Romagna) ===
+    comuni_er = [
+        "bologna", "modena", "parma", "reggio emilia", "piacenza", "ferrara",
+        "ravenna", "forlì", "cesena", "rimini", "imola", "faenza", "carpi",
+        "sassuolo", "formigliola", "fidenza", "scandiano", "lugo", "cesenatico",
+        "riccione", "cattolica", "cervia", "bellaria", "santarcangelo",
+        "castelvetro", "vignola", "mirandola", "cento"
+    ]
+    
+    for comune in comuni_er:
+        if comune in text_lower:
+            extracted['location'] = comune.title()
+            logger.info(f"📍 Location extracted: {comune.title()}")
+            break
+    
+    # === EXTRACT AGE ===
+    age_patterns = [
+        r"ho\s+(\d{1,3})\s+anni",
+        r"(\d{1,3})\s+anni",
+        r"età\s+(\d{1,3})",
+        r"sono\s+un\w*\s+di\s+(\d{1,3})"
+    ]
+    
+    for pattern in age_patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            age = int(match.group(1))
+            if 0 < age < 120:  # Sanity check
+                extracted['age'] = age
+                logger.info(f"👤 Age extracted: {age}")
+                break
+    
+    # === EXTRACT PAIN SCALE ===
+    pain_patterns = [
+        r"dolore\s+(\d{1,2})\s*/?\s*10",
+        r"intensità\s+(\d{1,2})",
+        r"scala\s+(\d{1,2})"
+    ]
+    
+    for pattern in pain_patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            pain_scale = int(match.group(1))
+            if 1 <= pain_scale <= 10:
+                extracted['pain_scale'] = pain_scale
+                logger.info(f"📊 Pain scale extracted: {pain_scale}/10")
+                break
+    
+    # === EXTRACT SYMPTOMS ===
+    symptom_keywords = [
+        "dolore", "male", "febbre", "tosse", "nausea", "vomito", "diarrea",
+        "vertigini", "sanguinamento", "gonfiore", "prurito", "bruciore",
+        "respiro difficile", "affanno", "palpitazioni", "cefalea", "emicrania",
+        "mal di testa", "mal di pancia", "mal di stomaco", "mal di schiena"
+    ]
+    
+    detected_symptoms = []
+    for symptom in symptom_keywords:
+        if symptom in text_lower:
+            detected_symptoms.append(symptom)
+    
+    if detected_symptoms:
+        extracted['symptoms'] = detected_symptoms
+        logger.info(f"🩺 Symptoms extracted: {', '.join(detected_symptoms)}")
+    
+    # === EXTRACT CHIEF COMPLAINT (first sentence) ===
+    sentences = text.split('.')
+    if sentences and len(sentences[0]) > 10:
+        extracted['chief_complaint'] = sentences[0].strip()
+        logger.info(f"📝 Chief complaint extracted: {sentences[0][:50]}...")
+    
+    logger.info(f"✅ Extracted {len(extracted)} slots: {list(extracted.keys())}")
+    return extracted
+
+
+# ============================================================================
+# SINGLE QUESTION POLICY ENFORCER
+# ============================================================================
+
+def enforce_single_question(ai_response: str) -> str:
+    """
+    Ensure AI response contains ONLY ONE question mark.
+    If multiple questions detected, keep only the first one.
+    
+    Args:
+        ai_response: AI generated response
+    
+    Returns:
+        str: Response with single question (if any)
+    
+    Example:
+        >>> response = "Dove ti trovi? Hai febbre? Quanto fa male?"
+        >>> enforce_single_question(response)
+        "Dove ti trovi?"
+    """
+    if not ai_response or '?' not in ai_response:
+        return ai_response
+    
+    # Split by question marks
+    parts = ai_response.split('?')
+    
+    # Count actual questions (ignore empty parts)
+    questions = [p.strip() for p in parts if p.strip()]
+    
+    if len(questions) <= 1:
+        # Already single question or statement
+        return ai_response
+    
+    # Multiple questions detected - keep first
+    first_question = questions[0] + '?'
+    
+    logger.warning(f"⚠️ Multiple questions detected. Enforcing single question policy.")
+    logger.info(f"Original: '{ai_response[:100]}...'")
+    logger.info(f"Enforced: '{first_question}'")
+    
+    return first_question
