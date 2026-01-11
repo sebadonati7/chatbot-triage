@@ -358,10 +358,12 @@ class ModelOrchestrator:
                 "- INPUT IBRIDO: L'utente può scegliere un'opzione O scrivere testo libero."
             ),
             "percorso_a": (
-                "EMERGENZA (Path A - Max 3 domande):\n"
-                "1. LOCATION: Comune (testo libero)\n"
+                "EMERGENZA (Path A - VINCOLO: 3-4 domande MINIME):\n"
+                "1. LOCATION: Comune (testo libero) - SKIP se già estratto\n"
                 "2. CHIEF_COMPLAINT: Sintomo con opzioni A/B/C\n"
-                "3. RED_FLAGS: Una domanda critica con opzioni A/B/C\n"
+                "3. RED_FLAGS: Una domanda critica con opzioni A/B/C (es. 'Il dolore si irradia? SI/NO')\n"
+                "4. (Opzionale) Domanda aggiuntiva se necessario per confermare urgenza\n"
+                "VINCOLO CRITICO: Fai ALMENO 3 domande prima di DISPOSITION, anche se dati già estratti.\n"
                 "Poi procedi a DISPOSITION. NO anamnesi completa."
             ),
             "percorso_b": (
@@ -372,13 +374,16 @@ class ModelOrchestrator:
                 "- Include hotline se necessario (1522, Telefono Amico 02 2327 2327, 118)"
             ),
             "percorso_c": (
-                "STANDARD (Path C - Protocollo completo):\n"
+                "STANDARD (Path C - VINCOLO: 5-7 domande MINIME):\n"
                 "1. LOCATION: Comune (testo libero)\n"
                 "2. CHIEF_COMPLAINT: Sintomo con opzioni A/B/C\n"
                 "3. PAIN_SCALE: Scala 1-10 con descrittori\n"
                 "4. RED_FLAGS: Opzioni A/B/C per sintomi critici\n"
-                "5. ANAMNESIS: Età, sesso, gravidanza, farmaci (una alla volta)\n"
-                "6. Procedi a DISPOSITION"
+                "5-7. ANAMNESIS: Età, sesso, gravidanza, farmaci, condizioni croniche (una alla volta)\n"
+                "VINCOLO CRITICO: Fai ALMENO 5 domande prima di DISPOSITION.\n"
+                "Se l'utente fornisce dati spontaneamente, fai comunque domande aggiuntive per raggiungere 5-7.\n"
+                "Se sintomi aggiuntivi emergono, aumenta il numero di domande (situazione più grave).\n"
+                "Poi procedi a DISPOSITION"
             ),
             "disposition_prompt": (
                 "FASE FINALE (DISPOSITION):\n"

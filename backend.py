@@ -34,7 +34,10 @@ except ImportError:
     # Warning mostrato in main() per non violare order rule
 
 # === COSTANTI ===
-LOG_FILE = "triage_logs.jsonl"
+# Cloud-ready: Usa env var per path log persistente
+LOG_DIR = os.environ.get("TRIAGE_LOGS_DIR", os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(LOG_DIR, exist_ok=True)  # Crea directory se non esiste
+LOG_FILE = os.path.join(LOG_DIR, "triage_logs.jsonl")
 DISTRICTS_FILE = "distretti_sanitari_er.json"
 def load_json_file(filepath: str) -> Dict:
     """Caricamento sicuro dei file JSON."""
@@ -223,6 +226,23 @@ class TriageDataStore:
                 record['area_clinica'] = 'Non Specificato'
                 record['specializzazione'] = 'Generale'
             
+            # === MAPPING COMUNE → DISTRETTO (Case-Insensitive & Trim-Safe) ===
+            comune_raw = record.get('comune') or record.get('location') or record.get('LOCATION')
+            if comune_raw:
+                comune_normalized = str(comune_raw).lower().strip()
+                # Carica district mapping se disponibile (lazy load per performance)
+                try:
+                    district_data = load_district_mapping()
+                    if district_data:
+                        mapping = district_data.get("comune_to_district_mapping", {})
+                        # Cerca case-insensitive e trim-safe
+                        distretto = mapping.get(comune_normalized, "UNKNOWN")
+                        record['distretto'] = distretto
+                except Exception:
+                    record['distretto'] = "UNKNOWN"
+            else:
+                record['distretto'] = "UNKNOWN"
+            
             # Organizzazione per Sessione
             session_id = record.get('session_id')
             if session_id:
@@ -251,7 +271,12 @@ class TriageDataStore:
             filtered.records = [r for r in filtered.records if r.get('week') == week]
         
         if district and district != "Tutti":
-            filtered.records = [r for r in filtered.records if r.get('comune', '').lower() == district.lower()]
+            # Case-insensitive district filtering (usa campo 'distretto' se disponibile)
+            district_normalized = str(district).lower().strip()
+            filtered.records = [
+                r for r in filtered.records 
+                if str(r.get('distretto', '')).lower().strip() == district_normalized
+            ]
         
         # Ricostruisci sessions
         for record in filtered.records:
@@ -479,10 +504,10 @@ def export_to_excel(datastore: TriageDataStore, kpi_vol: Dict, kpi_clin: Dict, k
 # === VISUALIZZAZIONI PLOTLY (Aggiornate v2.1 - Gennaio 2026) ===
 
 def render_throughput_chart(kpi_vol: Dict):
-    """Grafico throughput orario."""
+    """Grafico throughput orario con protezione zero-data."""
     throughput = kpi_vol.get('throughput_orario', {})
-    if not throughput:
-        st.info("Nessun dato disponibile per throughput orario.")
+    if not throughput or len(throughput) == 0:
+        st.info("ℹ️ Nessun dato disponibile per throughput orario.")
         return
     
     hours = sorted(throughput.keys())
@@ -515,6 +540,11 @@ def render_throughput_chart(kpi_vol: Dict):
 
 
 def render_urgenza_pie(kpi_clin: Dict):
+    """Grafico urgenza con protezione zero-data."""
+    stratificazione = kpi_clin.get('stratificazione_urgenza', {})
+    if not stratificazione or len(stratificazione) == 0:
+        st.info("ℹ️ Nessun dato disponibile per stratificazione urgenza.")
+        return
     """Grafico a torta stratificazione urgenza."""
     stratificazione = kpi_clin.get('stratificazione_urgenza', {})
     if not stratificazione:
@@ -601,27 +631,53 @@ def main():
     # === SIDEBAR: FILTRI ===
     st.sidebar.header("📂 Filtri Temporali e Territoriali")
     
-    # Filtro Anno
+    # Filtro Anno (pre-popolato con anni disponibili + 2025/2026)
     years = datastore.get_unique_values('year')
-    sel_year = st.sidebar.selectbox("Anno", sorted(years, reverse=True)) if years else None
+    # Aggiungi anni standard se non presenti
+    all_years = sorted(set(years + [2025, 2026]), reverse=True)
+    sel_year = st.sidebar.selectbox("Anno", all_years) if all_years else None
     
-    # Filtro Mese
-    months = []
+    # Filtro Mese (pre-popolato 1-12, mostra "0" se nessun dato)
+    month_names = {
+        1: "Gennaio", 2: "Febbraio", 3: "Marzo", 4: "Aprile",
+        5: "Maggio", 6: "Giugno", 7: "Luglio", 8: "Agosto",
+        9: "Settembre", 10: "Ottobre", 11: "Novembre", 12: "Dicembre"
+    }
+    
+    months_available = []
     if sel_year:
         filtered_by_year = datastore.filter(year=sel_year)
-        months = filtered_by_year.get_unique_values('month')
+        months_available = filtered_by_year.get_unique_values('month')
     
-    sel_month = st.sidebar.selectbox("Mese", ['Tutti'] + sorted(months)) if months else 'Tutti'
-    sel_month = None if sel_month == 'Tutti' else sel_month
+    # Pre-popolare con tutti i mesi 1-12
+    month_options = ['Tutti']
+    for m in range(1, 13):
+        month_label = f"{m:02d} - {month_names.get(m, 'Mese')}"
+        if m in months_available:
+            month_options.append(month_label)
+        else:
+            month_options.append(f"{month_label} (0 dati)")
     
-    # Filtro Settimana
-    weeks = []
+    sel_month = st.sidebar.selectbox("Mese", month_options)
+    sel_month = None if sel_month == 'Tutti' else int(sel_month.split(' - ')[0])
+    
+    # Filtro Settimana (pre-popolato 1-52, mostra "0" se nessun dato)
+    weeks_available = []
     if sel_year:
         filtered_temp = datastore.filter(year=sel_year, month=sel_month)
-        weeks = filtered_temp.get_unique_values('week')
+        weeks_available = filtered_temp.get_unique_values('week')
     
-    sel_week = st.sidebar.selectbox("Settimana ISO", ['Tutte'] + sorted(weeks)) if weeks else 'Tutte'
-    sel_week = None if sel_week == 'Tutte' else sel_week
+    # Pre-popolare con tutte le settimane 1-52
+    week_options = ['Tutte']
+    for w in range(1, 53):
+        week_label = f"Settimana {w:02d}"
+        if w in weeks_available:
+            week_options.append(week_label)
+        else:
+            week_options.append(f"{week_label} (0 dati)")
+    
+    sel_week = st.sidebar.selectbox("Settimana ISO", week_options)
+    sel_week = None if sel_week == 'Tutte' else int(sel_week.split(' ')[1])
     
     # Filtro Distretto Sanitario (Integrato con distretti_sanitari_er.json)
     st.sidebar.divider()

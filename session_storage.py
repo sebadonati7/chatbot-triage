@@ -96,3 +96,51 @@ def get_storage() -> FileSessionStorage:
     if _storage_singleton is None:
         _storage_singleton = FileSessionStorage()
     return _storage_singleton
+
+
+# ============================================================================
+# COMPATIBILITY FUNCTIONS (per frontend.py)
+# ============================================================================
+
+def sync_session_to_storage(session_id: str, session_state: Any) -> bool:
+    """
+    Sincronizza session_state a storage.
+    Alias per save_session per compatibilità con frontend.py.
+    
+    Args:
+        session_id: ID sessione
+        session_state: Streamlit session_state object
+    
+    Returns:
+        bool: True se salvato con successo
+    """
+    storage = get_storage()
+    
+    # Converti session_state a dict (escludi chiavi private di Streamlit)
+    data = {}
+    for key, value in session_state.items():
+        if not key.startswith('_') and key != 'rerun':
+            try:
+                # Prova a serializzare (skip oggetti non serializzabili)
+                json.dumps(value, default=str)
+                data[key] = value
+            except (TypeError, ValueError):
+                # Skip oggetti non serializzabili
+                continue
+    
+    return storage.save_session(session_id, data)
+
+
+def load_session_from_storage(session_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Carica sessione da storage.
+    Alias per load_session per compatibilità con frontend.py.
+    
+    Args:
+        session_id: ID sessione
+    
+    Returns:
+        Dict con dati sessione o None
+    """
+    storage = get_storage()
+    return storage.load_session(session_id)

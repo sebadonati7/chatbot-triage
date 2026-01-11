@@ -380,8 +380,12 @@ def receive_triage_completion():
         # Add reception timestamp
         triage_data['received_at'] = datetime.now().isoformat()
         
-        # Save to triage_logs.jsonl
-        log_file = "triage_logs.jsonl"
+        # Save to triage_logs.jsonl (Cloud-ready: path persistente)
+        # Usa env var o path relativo per compatibilità cloud
+        log_dir = os.environ.get("TRIAGE_LOGS_DIR", os.path.dirname(os.path.abspath(__file__)))
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, "triage_logs.jsonl")
+        
         try:
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(triage_data, ensure_ascii=False) + '\n')
