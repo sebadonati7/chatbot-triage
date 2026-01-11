@@ -19,9 +19,12 @@ import json
 import os
 import re
 import io
+import threading
+import csv
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from typing import Dict, List, Any, Optional, Tuple
+from pathlib import Path
 import plotly.graph_objects as go
 
 # === GESTIONE DIPENDENZE OPZIONALI ===
@@ -68,6 +71,17 @@ SPECIALIZZAZIONI = [
     "Pediatria", "Ginecologia", "Dermatologia", "Psichiatria",
     "Otorinolaringoiatria", "Oftalmologia", "Generale"
 ]
+
+# === THREAD-SAFETY E CACHE ===
+_WRITE_LOCK = threading.Lock()  # Lock globale per scrittura thread-safe JSONL
+_FILE_CACHE = {}  # Cache per ottimizzazione mtime: {filepath: {'mtime': float, 'records': List, 'sessions': Dict}}
+
+# Schema obbligatorio per validazione
+REQUIRED_FIELDS = {
+    'session_id': str,
+    'timestamp_start': str,
+    'timestamp_end': str,
+}
 def cleanup_streamlit_cache():
     """Rimuove le cache fisiche che possono causare il 'Failed to fetch'"""
     cache_dirs = ['.streamlit/cache', '__pycache__']
@@ -92,19 +106,104 @@ class TriageDataStore:
         self.records: List[Dict] = []
         self.sessions: Dict[str, List[Dict]] = {}
         self.parse_errors = 0
+        self.validation_errors = 0  # Nuovo: conta errori validazione schema
+        
+        # Cache key per questo filepath
+        self._cache_key = str(Path(filepath).absolute())
         
         self._load_data()
         self._enrich_data()
     
+    def _validate_record_schema(self, record: Dict, line_num: int = None) -> bool:
+        """
+        Validazione rigorosa schema record.
+        
+        Args:
+            record: Record da validare
+            line_num: Numero riga (per logging)
+        
+        Returns:
+            bool: True se valido, False se scartato
+        """
+        # 1. Verifica campi obbligatori
+        for field, expected_type in REQUIRED_FIELDS.items():
+            if field not in record:
+                self.validation_errors += 1
+                log_msg = f"Record scartato (linea {line_num}): campo obbligatorio '{field}' mancante"
+                print(f"⚠️ {log_msg}")
+                return False
+            
+            if not isinstance(record[field], expected_type):
+                self.validation_errors += 1
+                log_msg = f"Record scartato (linea {line_num}): campo '{field}' tipo errato (atteso {expected_type.__name__})"
+                print(f"⚠️ {log_msg}")
+                return False
+        
+        # 2. Verifica presenza urgency_level (in outcome o metadata)
+        urgency_found = False
+        
+        if 'outcome' in record and isinstance(record['outcome'], dict):
+            if 'urgency_level' in record['outcome']:
+                urgency_found = True
+        
+        if not urgency_found and 'metadata' in record and isinstance(record['metadata'], dict):
+            if 'urgency' in record['metadata'] or 'urgency_level' in record['metadata']:
+                urgency_found = True
+        
+        if not urgency_found and ('urgency' in record or 'urgency_level' in record):
+            urgency_found = True
+        
+        if not urgency_found:
+            self.validation_errors += 1
+            log_msg = f"Record scartato (linea {line_num}): urgency_level non trovato (obbligatorio per dashboard)"
+            print(f"⚠️ {log_msg}")
+            return False
+        
+        # 3. Validazione formato timestamp (ISO 8601)
+        for ts_field in ['timestamp_start', 'timestamp_end']:
+            if ts_field in record:
+                ts_str = record[ts_field]
+                try:
+                    datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                except (ValueError, AttributeError):
+                    self.validation_errors += 1
+                    log_msg = f"Record scartato (linea {line_num}): timestamp '{ts_field}' formato non valido: {ts_str}"
+                    print(f"⚠️ {log_msg}")
+                    return False
+        
+        return True
+    
     def _load_data(self):
-        """Caricamento JSONL con gestione errori robusta e encoding resiliente."""
-        if not os.path.exists(self.filepath):
+        """
+        Caricamento JSONL con gestione errori robusta, encoding resiliente,
+        validazione schema e cache-busting basato su mtime.
+        """
+        filepath_obj = Path(self.filepath)
+        
+        if not filepath_obj.exists():
             st.warning(f"⚠️ File {self.filepath} non trovato. Nessun dato disponibile.")
             return
         
-        if os.path.getsize(self.filepath) == 0:
+        if filepath_obj.stat().st_size == 0:
             st.warning(f"⚠️ File {self.filepath} vuoto. Inizia un triage per popolare i dati.")
             return
+        
+        # === CACHE-BUSTING: Verifica mtime ===
+        current_mtime = filepath_obj.stat().st_mtime
+        
+        if self._cache_key in _FILE_CACHE:
+            cached = _FILE_CACHE[self._cache_key]
+            if cached['mtime'] == current_mtime:
+                # Cache hit: usa dati cached
+                self.records = cached['records'].copy()
+                self.sessions = cached['sessions'].copy()
+                return
+        
+        # Cache miss o file modificato: ricarica
+        self.parse_errors = 0
+        self.validation_errors = 0
+        self.records = []
+        self.sessions = {}
         
         # CRITICAL: Prova encoding multipli per massima resilienza
         encodings_to_try = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
@@ -119,10 +218,16 @@ class TriageDataStore:
                         
                         try:
                             record = json.loads(line)
+                            
+                            # === VALIDAZIONE SCHEMA ===
+                            if not self._validate_record_schema(record, line_num):
+                                # Record scartato per validazione fallita
+                                continue
+                            
                             self.records.append(record)
+                            
                         except json.JSONDecodeError as e:
                             self.parse_errors += 1
-                            print(f"Warning: Riga {line_num} corrotta, skipping: {e}")
                             continue
                 
                 # Se siamo arrivati qui, l'encoding ha funzionato
@@ -139,8 +244,18 @@ class TriageDataStore:
                     st.error(f"❌ Errore lettura file con tutti gli encoding: {e}")
                     return
         
+        # Aggiorna cache
+        _FILE_CACHE[self._cache_key] = {
+            'mtime': current_mtime,
+            'records': self.records.copy(),
+            'sessions': {}
+        }
+        
         if self.parse_errors > 0:
-            st.info(f"ℹ️ {self.parse_errors} righe corrotte saltate durante il caricamento.")
+            st.info(f"ℹ️ {self.parse_errors} righe JSON corrotte saltate durante il caricamento.")
+        
+        if self.validation_errors > 0:
+            st.warning(f"⚠️ {self.validation_errors} record scartati per validazione schema fallita (campi obbligatori mancanti).")
     
     def _parse_timestamp_iso(self, timestamp_str: str) -> Optional[datetime]:
         """
@@ -178,10 +293,11 @@ class TriageDataStore:
         return None
     
     def _enrich_data(self):
-        """Arricchimento dati con calcoli temporali e NLP."""
+        """Arricchimento dati con calcoli temporali e NLP. Aggiorna anche cache."""
         for record in self.records:
             # === PARSING TEMPORALE ROBUSTO ===
-            timestamp_str = record.get('timestamp')
+            # Usa timestamp_end se disponibile, altrimenti timestamp_start
+            timestamp_str = record.get('timestamp_end') or record.get('timestamp_start') or record.get('timestamp')
             dt = self._parse_timestamp_iso(timestamp_str)
             
             if dt:
@@ -215,27 +331,27 @@ class TriageDataStore:
             # Sintomi Detection
             record['sintomi_rilevati'] = [s for s in SINTOMI_COMUNI if s in combined_text]
             
-            # Estrazione Urgenza
-            metadata = record.get('metadata', {})
-            if isinstance(metadata, dict):
-                record['urgenza'] = metadata.get('urgenza', metadata.get('urgency', 3))
-                record['area_clinica'] = metadata.get('area', 'Non Specificato')
-                record['specializzazione'] = metadata.get('specialization', 'Generale')
-            else:
-                record['urgenza'] = 3
-                record['area_clinica'] = 'Non Specificato'
-                record['specializzazione'] = 'Generale'
+            # Estrazione Urgenza (priorità: outcome > metadata > root)
+            urgency = None
+            if 'outcome' in record and isinstance(record['outcome'], dict):
+                urgency = record['outcome'].get('urgency_level') or record['outcome'].get('urgency')
+            if urgency is None and 'metadata' in record and isinstance(record['metadata'], dict):
+                urgency = record['metadata'].get('urgency_level') or record['metadata'].get('urgency')
+            if urgency is None:
+                urgency = record.get('urgency_level') or record.get('urgency', 3)
+            
+            record['urgenza'] = urgency if urgency is not None else 3
+            record['area_clinica'] = record.get('area_clinica', 'Non Specificato')
+            record['specializzazione'] = record.get('specializzazione', 'Generale')
             
             # === MAPPING COMUNE → DISTRETTO (Case-Insensitive & Trim-Safe) ===
             comune_raw = record.get('comune') or record.get('location') or record.get('LOCATION')
             if comune_raw:
                 comune_normalized = str(comune_raw).lower().strip()
-                # Carica district mapping se disponibile (lazy load per performance)
                 try:
                     district_data = load_district_mapping()
                     if district_data:
                         mapping = district_data.get("comune_to_district_mapping", {})
-                        # Cerca case-insensitive e trim-safe
                         distretto = mapping.get(comune_normalized, "UNKNOWN")
                         record['distretto'] = distretto
                 except Exception:
@@ -249,6 +365,10 @@ class TriageDataStore:
                 if session_id not in self.sessions:
                     self.sessions[session_id] = []
                 self.sessions[session_id].append(record)
+        
+        # Aggiorna cache sessions
+        if self._cache_key in _FILE_CACHE:
+            _FILE_CACHE[self._cache_key]['sessions'] = self.sessions.copy()
     
     def filter(self, year: Optional[int] = None, month: Optional[int] = None, 
                week: Optional[int] = None, district: Optional[str] = None) -> 'TriageDataStore':
@@ -258,6 +378,8 @@ class TriageDataStore:
         filtered = TriageDataStore.__new__(TriageDataStore)
         filtered.filepath = self.filepath
         filtered.parse_errors = 0
+        filtered.validation_errors = 0  # Reset per filtered datastore
+        filtered._cache_key = str(Path(filtered.filepath).absolute())
         filtered.records = self.records.copy()
         filtered.sessions = {}
         
@@ -287,6 +409,226 @@ class TriageDataStore:
                 filtered.sessions[sid].append(record)
         
         return filtered
+    
+    @staticmethod
+    def append_record_thread_safe(filepath: str, record: Dict) -> bool:
+        """
+        Scrittura thread-safe di un record su file JSONL.
+        Usa lock globale per prevenire corruzioni in ambienti multi-utente.
+        
+        Args:
+            filepath: Path al file JSONL
+            record: Record da scrivere (dict)
+        
+        Returns:
+            bool: True se scritto con successo, False altrimenti
+        """
+        try:
+            with _WRITE_LOCK:
+                # Validazione record prima di scrivere
+                temp_store = TriageDataStore.__new__(TriageDataStore)
+                temp_store.validation_errors = 0
+                
+                if not temp_store._validate_record_schema(record):
+                    return False
+                
+                # Scrittura atomica: append con flush
+                with open(filepath, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                    f.flush()
+                    os.fsync(f.fileno())  # Force write to disk
+                
+                # Invalida cache per questo filepath
+                cache_key = str(Path(filepath).absolute())
+                if cache_key in _FILE_CACHE:
+                    del _FILE_CACHE[cache_key]
+                
+                return True
+                
+        except Exception as e:
+            return False
+    
+    def to_csv(self, include_enriched: bool = True) -> bytes:
+        """
+        Esporta dati in formato CSV pronto per download Streamlit.
+        
+        Args:
+            include_enriched: Se True, include campi arricchiti (year, month, week, distretto, ecc.)
+        
+        Returns:
+            bytes: CSV in memoria (pronto per st.download_button)
+        """
+        if not self.records:
+            return b''
+        
+        output = io.StringIO()
+        
+        base_columns = [
+            'session_id', 'timestamp_start', 'timestamp_end', 'total_duration_seconds',
+            'urgency_level', 'disposition', 'facility_recommended', 'comune', 'distretto'
+        ]
+        
+        enriched_columns = [
+            'year', 'month', 'week', 'day_of_week', 'hour',
+            'area_clinica', 'specializzazione', 'has_red_flag', 'red_flags_count'
+        ]
+        
+        columns = base_columns + (enriched_columns if include_enriched else [])
+        
+        writer = csv.DictWriter(output, fieldnames=columns, extrasaction='ignore')
+        writer.writeheader()
+        
+        for record in self.records:
+            row = {}
+            
+            row['session_id'] = record.get('session_id', '')
+            row['timestamp_start'] = record.get('timestamp_start', '')
+            row['timestamp_end'] = record.get('timestamp_end', '')
+            row['total_duration_seconds'] = record.get('total_duration_seconds', '')
+            
+            # Urgency (cerca in outcome/metadata/root)
+            urgency = None
+            if 'outcome' in record and isinstance(record['outcome'], dict):
+                urgency = record['outcome'].get('urgency_level') or record['outcome'].get('urgency')
+            if urgency is None and 'metadata' in record and isinstance(record['metadata'], dict):
+                urgency = record['metadata'].get('urgency_level') or record['metadata'].get('urgency')
+            row['urgency_level'] = urgency or record.get('urgenza', record.get('urgency', ''))
+            
+            if 'outcome' in record and isinstance(record['outcome'], dict):
+                row['disposition'] = record['outcome'].get('disposition', '')
+                row['facility_recommended'] = record['outcome'].get('facility_recommended', '')
+            
+            row['comune'] = record.get('comune') or record.get('location') or record.get('LOCATION', '')
+            row['distretto'] = record.get('distretto', '')
+            
+            if include_enriched:
+                row['year'] = record.get('year', '')
+                row['month'] = record.get('month', '')
+                row['week'] = record.get('week', '')
+                row['day_of_week'] = record.get('day_of_week', '')
+                row['hour'] = record.get('hour', '')
+                row['area_clinica'] = record.get('area_clinica', '')
+                row['specializzazione'] = record.get('specializzazione', '')
+                row['has_red_flag'] = record.get('has_red_flag', False)
+                row['red_flags_count'] = len(record.get('red_flags', []))
+            
+            writer.writerow(row)
+        
+        return output.getvalue().encode('utf-8-sig')  # UTF-8 BOM per Excel compatibility
+    
+    def to_excel(self, kpi_vol: Dict = None, kpi_clin: Dict = None, kpi_ctx: Dict = None) -> Optional[bytes]:
+        """
+        Esporta dati in formato Excel con fogli multipli (KPI + Dati Grezzi).
+        Metodo della classe per coerenza architetturale.
+        
+        Args:
+            kpi_vol: KPI volumetrici (opzionale)
+            kpi_clin: KPI clinici (opzionale)
+            kpi_ctx: KPI context-aware (opzionale)
+        
+        Returns:
+            bytes: Excel in memoria (pronto per st.download_button) o None se xlsxwriter non disponibile
+        """
+        if not XLSX_AVAILABLE:
+            return None
+        
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        
+        if kpi_vol or kpi_clin or kpi_ctx:
+            ws_kpi = workbook.add_worksheet('KPI Aggregati')
+            header_format = workbook.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white'})
+            number_format = workbook.add_format({'num_format': '0.00'})
+            
+            row = 0
+            ws_kpi.write(row, 0, 'Categoria', header_format)
+            ws_kpi.write(row, 1, 'Metrica', header_format)
+            ws_kpi.write(row, 2, 'Valore', header_format)
+            row += 1
+            
+            if kpi_vol:
+                for key, val in kpi_vol.items():
+                    if key != 'throughput_orario':
+                        ws_kpi.write(row, 0, 'Volumetrico')
+                        ws_kpi.write(row, 1, key)
+                        ws_kpi.write(row, 2, val, number_format if isinstance(val, (int, float)) else None)
+                        row += 1
+            
+            if kpi_clin:
+                ws_kpi.write(row, 0, 'Clinico')
+                ws_kpi.write(row, 1, 'prevalenza_red_flags')
+                ws_kpi.write(row, 2, kpi_clin.get('prevalenza_red_flags', 0), number_format)
+                row += 1
+            
+            if kpi_ctx:
+                ws_kpi.write(row, 0, 'Context-Aware')
+                ws_kpi.write(row, 1, 'tasso_deviazione_ps')
+                ws_kpi.write(row, 2, kpi_ctx.get('tasso_deviazione_ps', 0), number_format)
+        
+        ws_raw = workbook.add_worksheet('Dati Grezzi')
+        header_format = workbook.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white'})
+        
+        headers = [
+            'Timestamp End', 'Session ID', 'Urgency Level', 'Disposition', 
+            'Facility', 'Comune', 'Distretto', 'Year', 'Month', 'Week',
+            'Area Clinica', 'Specializzazione', 'Has Red Flag'
+        ]
+        
+        for col, header in enumerate(headers):
+            ws_raw.write(0, col, header, header_format)
+        
+        row = 1
+        for record in self.records:
+            ws_raw.write(row, 0, record.get('timestamp_end', ''))
+            ws_raw.write(row, 1, record.get('session_id', ''))
+            
+            urgency = record.get('urgenza')
+            if urgency is None and 'outcome' in record and isinstance(record['outcome'], dict):
+                urgency = record['outcome'].get('urgency_level') or record['outcome'].get('urgency')
+            ws_raw.write(row, 2, urgency or '')
+            
+            if 'outcome' in record and isinstance(record['outcome'], dict):
+                ws_raw.write(row, 3, record['outcome'].get('disposition', ''))
+                ws_raw.write(row, 4, record['outcome'].get('facility_recommended', ''))
+            
+            ws_raw.write(row, 5, record.get('comune') or record.get('location', ''))
+            ws_raw.write(row, 6, record.get('distretto', ''))
+            ws_raw.write(row, 7, record.get('year', ''))
+            ws_raw.write(row, 8, record.get('month', ''))
+            ws_raw.write(row, 9, record.get('week', ''))
+            ws_raw.write(row, 10, record.get('area_clinica', ''))
+            ws_raw.write(row, 11, record.get('specializzazione', ''))
+            ws_raw.write(row, 12, record.get('has_red_flag', False))
+            
+            row += 1
+        
+        workbook.close()
+        output.seek(0)
+        return output.read()
+    
+    def reload_if_updated(self) -> bool:
+        """
+        Ricarica i dati solo se il file è stato modificato (cache-busting).
+        Utile per aggiornare dashboard dopo nuovi triage.
+        
+        Returns:
+            bool: True se ricaricato, False se cache valida
+        """
+        filepath_obj = Path(self.filepath)
+        if not filepath_obj.exists():
+            return False
+        
+        current_mtime = filepath_obj.stat().st_mtime
+        
+        if self._cache_key in _FILE_CACHE:
+            cached = _FILE_CACHE[self._cache_key]
+            if cached['mtime'] == current_mtime:
+                return False  # Cache valida
+        
+        # File modificato: ricarica
+        self._load_data()
+        self._enrich_data()
+        return True
     
     def get_unique_values(self, field: str) -> List:
         """Estrae valori unici per un campo."""
@@ -438,6 +780,13 @@ def map_comune_to_district(comune: str, district_data: Dict) -> str:
 
 # === EXPORT EXCEL ===
 def export_to_excel(datastore: TriageDataStore, kpi_vol: Dict, kpi_clin: Dict, kpi_ctx: Dict) -> Optional[bytes]:
+    """
+    [DEPRECATED] Usa datastore.to_excel() invece.
+    Mantenuta per retrocompatibilità.
+    """
+    return datastore.to_excel(kpi_vol, kpi_clin, kpi_ctx)
+
+def _export_to_excel_legacy(datastore: TriageDataStore, kpi_vol: Dict, kpi_clin: Dict, kpi_ctx: Dict) -> Optional[bytes]:
     """
     Export professionale Excel con fogli separati.
     """
@@ -712,8 +1061,19 @@ def main():
             kpi_clin = calculate_kpi_clinici(filtered_datastore)
             kpi_ctx = calculate_kpi_context_aware(filtered_datastore)
             
-            excel_data = export_to_excel(filtered_datastore, kpi_vol, kpi_clin, kpi_ctx)
+            excel_data = filtered_datastore.to_excel(kpi_vol, kpi_clin, kpi_ctx)
             
+            # Export CSV
+            csv_data = filtered_datastore.to_csv(include_enriched=True)
+            if csv_data:
+                st.sidebar.download_button(
+                    label="📄 Scarica Report CSV",
+                    data=csv_data,
+                    file_name=f"Report_Triage_W{sel_week or 'ALL'}_{sel_year or 'ALL'}.csv",
+                    mime="text/csv"
+                )
+            
+            # Export Excel
             if excel_data:
                 filename = f"Report_Triage_W{sel_week or 'ALL'}_{sel_year or 'ALL'}.xlsx"
                 st.sidebar.download_button(

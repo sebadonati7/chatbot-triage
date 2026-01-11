@@ -1413,11 +1413,25 @@ def save_structured_log():
             "version": "2.0"
         }
         
-        # Scrittura su file JSONL
-        with open(LOG_FILE, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
-        
-        logger.info(f"Structured log 2.0 salvato: session={st.session_state.session_id}")
+        # === SCRITTURA THREAD-SAFE ===
+        try:
+            from backend import TriageDataStore
+            success = TriageDataStore.append_record_thread_safe(LOG_FILE, log_entry)
+            
+            if success:
+                logger.info(f"✅ Structured log 2.0 salvato (thread-safe): session={st.session_state.session_id}")
+            else:
+                logger.error(f"❌ Errore salvataggio log: validazione schema fallita")
+                
+        except Exception as e:
+            logger.error(f"❌ Errore salvataggio log: {e}")
+            # Fallback: scrittura diretta (non thread-safe) solo in caso di errore
+            try:
+                with open(LOG_FILE, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+                logger.warning("⚠️ Log salvato con fallback non thread-safe")
+            except Exception as fallback_error:
+                logger.error(f"❌ Fallback scrittura fallito: {fallback_error}")
         
         # 🆕 SYNC TO SESSION STORAGE
         if SESSION_STORAGE_ENABLED:
