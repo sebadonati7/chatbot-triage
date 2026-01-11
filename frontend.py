@@ -55,6 +55,12 @@ except ImportError as e:
 # --- TIPIZZAZIONE E STRUTTURE DATI ---
 from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
+try:
+    from bridge import stream_ai_response
+except ImportError:
+    logging.error("❌ Impossibile importare stream_ai_response da bridge.py")
+    def stream_ai_response(*args, **kwargs):
+        yield "Errore: Servizio di streaming non disponibile."
 
 # --- GESTIONE RETE E API ---
 from requests.adapters import HTTPAdapter
@@ -3130,4 +3136,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
