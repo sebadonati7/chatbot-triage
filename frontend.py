@@ -1404,7 +1404,7 @@ def generate_ai_reply(prompt_text: str) -> Optional[str]:
         if is_first_message:
             try:
                 from ui_components import detect_medical_intent
-                st.session_state.medical_intent_detected = detect_medical_intent(user_input, orchestrator)
+                st.session_state.medical_intent_detected = detect_medical_intent(user_input, st.session_state.orchestrator)
                 if st.session_state.medical_intent_detected:
                     logger.info("🩺 Medical intent detected - activating triage mode")
             except ImportError:
