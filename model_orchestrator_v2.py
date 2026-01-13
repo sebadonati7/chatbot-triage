@@ -389,7 +389,7 @@ class ModelOrchestrator:
                 "B (Background): Età, sesso, farmaci.\n"
                 "A (Assessment): Red Flags escluse e risposte chiave.\n"
                 "R (Recommendation): Struttura suggerita e motivo."
-            )
+            ),
             "disposition_final_prompt": (
                 "FASE FINALE (DISPOSITION):\n"
                 "Genera report SBAR strutturato:\n"
