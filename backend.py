@@ -80,10 +80,18 @@ _WRITE_LOCK = threading.Lock()  # Lock globale per scrittura thread-safe JSONL
 _FILE_CACHE = {}  # Cache per ottimizzazione mtime: {filepath: {'mtime': float, 'records': List, 'sessions': Dict}}
 
 # Schema obbligatorio per validazione
-REQUIRED_FIELDS = {
+# V6.0: Schema flessibile - supporta sia log "summary" (vecchi) che "interaction" (nuovi)
+REQUIRED_FIELDS_SUMMARY = {
     'session_id': str,
     'timestamp_start': str,
     'timestamp_end': str,
+}
+
+REQUIRED_FIELDS_INTERACTION = {
+    'session_id': str,
+    'timestamp': str,
+    'user_input': str,
+    'bot_response': str,
 }
 def cleanup_streamlit_cache():
     """Rimuove le cache fisiche che possono causare il 'Failed to fetch'"""
@@ -119,7 +127,7 @@ class TriageDataStore:
     
     def _validate_record_schema(self, record: Dict, line_num: int = None) -> bool:
         """
-        Validazione rigorosa schema record.
+        V6.0: Validazione flessibile - supporta sia log "summary" che "interaction".
         
         Args:
             record: Record da validare
@@ -128,53 +136,95 @@ class TriageDataStore:
         Returns:
             bool: True se valido, False se scartato
         """
-        # 1. Verifica campi obbligatori
-        for field, expected_type in REQUIRED_FIELDS.items():
-            if field not in record:
-                self.validation_errors += 1
-                log_msg = f"Record scartato (linea {line_num}): campo obbligatorio '{field}' mancante"
-                print(f"⚠️ {log_msg}")
-                return False
-            
-            if not isinstance(record[field], expected_type):
-                self.validation_errors += 1
-                log_msg = f"Record scartato (linea {line_num}): campo '{field}' tipo errato (atteso {expected_type.__name__})"
-                print(f"⚠️ {log_msg}")
-                return False
+        # === DETECTION: Summary vs Interaction ===
+        is_interaction = 'timestamp' in record and 'user_input' in record and 'bot_response' in record
+        is_summary = 'timestamp_start' in record and 'timestamp_end' in record
         
-        # 2. Verifica presenza urgency_level (in outcome o metadata)
-        urgency_found = False
-        
-        if 'outcome' in record and isinstance(record['outcome'], dict):
-            if 'urgency_level' in record['outcome']:
-                urgency_found = True
-        
-        if not urgency_found and 'metadata' in record and isinstance(record['metadata'], dict):
-            if 'urgency' in record['metadata'] or 'urgency_level' in record['metadata']:
-                urgency_found = True
-        
-        if not urgency_found and ('urgency' in record or 'urgency_level' in record):
-            urgency_found = True
-        
-        if not urgency_found:
+        if not is_interaction and not is_summary:
             self.validation_errors += 1
-            log_msg = f"Record scartato (linea {line_num}): urgency_level non trovato (obbligatorio per dashboard)"
+            log_msg = f"Record scartato (linea {line_num}): formato sconosciuto (né summary né interaction)"
             print(f"⚠️ {log_msg}")
             return False
         
-        # 3. Validazione formato timestamp (ISO 8601)
-        for ts_field in ['timestamp_start', 'timestamp_end']:
-            if ts_field in record:
-                ts_str = record[ts_field]
-                try:
-                    datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
-                except (ValueError, AttributeError):
+        # === VALIDAZIONE INTERACTION (V6.0 - Real-time) ===
+        if is_interaction:
+            # Campi obbligatori per interaction
+            for field, expected_type in REQUIRED_FIELDS_INTERACTION.items():
+                if field not in record:
                     self.validation_errors += 1
-                    log_msg = f"Record scartato (linea {line_num}): timestamp '{ts_field}' formato non valido: {ts_str}"
+                    log_msg = f"Record interaction scartato (linea {line_num}): campo '{field}' mancante"
                     print(f"⚠️ {log_msg}")
                     return False
+                
+                if not isinstance(record[field], expected_type):
+                    self.validation_errors += 1
+                    log_msg = f"Record interaction scartato (linea {line_num}): campo '{field}' tipo errato"
+                    print(f"⚠️ {log_msg}")
+                    return False
+            
+            # Validazione timestamp ISO 8601
+            try:
+                datetime.fromisoformat(record['timestamp'].replace('Z', '+00:00'))
+            except (ValueError, AttributeError):
+                self.validation_errors += 1
+                log_msg = f"Record interaction scartato (linea {line_num}): timestamp formato non valido"
+                print(f"⚠️ {log_msg}")
+                return False
+            
+            # Interaction log valido (urgency_level opzionale, può essere in metadata)
+            return True
         
-        return True
+        # === VALIDAZIONE SUMMARY (Legacy - Fine Sessione) ===
+        if is_summary:
+            # Campi obbligatori per summary
+            for field, expected_type in REQUIRED_FIELDS_SUMMARY.items():
+                if field not in record:
+                    self.validation_errors += 1
+                    log_msg = f"Record summary scartato (linea {line_num}): campo '{field}' mancante"
+                    print(f"⚠️ {log_msg}")
+                    return False
+                
+                if not isinstance(record[field], expected_type):
+                    self.validation_errors += 1
+                    log_msg = f"Record summary scartato (linea {line_num}): campo '{field}' tipo errato"
+                    print(f"⚠️ {log_msg}")
+                    return False
+            
+            # Verifica presenza urgency_level (obbligatorio per summary)
+            urgency_found = False
+            
+            if 'outcome' in record and isinstance(record['outcome'], dict):
+                if 'urgency_level' in record['outcome']:
+                    urgency_found = True
+            
+            if not urgency_found and 'metadata' in record and isinstance(record['metadata'], dict):
+                if 'urgency' in record['metadata'] or 'urgency_level' in record['metadata']:
+                    urgency_found = True
+            
+            if not urgency_found and ('urgency' in record or 'urgency_level' in record):
+                urgency_found = True
+            
+            if not urgency_found:
+                self.validation_errors += 1
+                log_msg = f"Record summary scartato (linea {line_num}): urgency_level non trovato"
+                print(f"⚠️ {log_msg}")
+                return False
+            
+            # Validazione formato timestamp (ISO 8601)
+            for ts_field in ['timestamp_start', 'timestamp_end']:
+                if ts_field in record:
+                    ts_str = record[ts_field]
+                    try:
+                        datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                    except (ValueError, AttributeError):
+                        self.validation_errors += 1
+                        log_msg = f"Record summary scartato (linea {line_num}): timestamp '{ts_field}' formato non valido"
+                        print(f"⚠️ {log_msg}")
+                        return False
+            
+            return True
+        
+        return False
     
     def _load_data(self):
         """
@@ -973,6 +1023,15 @@ def main():
     except Exception as e:
         st.warning(f"⚠️ Errore caricamento distretti: {e}")
         district_data = {"health_districts": [], "comune_to_district_mapping": {}}
+    
+    # V6.0: Inizializza file log se non esiste
+    if not os.path.exists(LOG_FILE):
+        try:
+            with open(LOG_FILE, 'w', encoding='utf-8') as f:
+                pass  # Crea file vuoto
+            st.info("💡 File log creato. Inizia una chat per popolare i dati.")
+        except Exception as e:
+            st.error(f"❌ Errore creazione file log: {e}")
     
     # Early return se nessun dato
     if not datastore.records:

@@ -1378,7 +1378,226 @@ def auto_advance_if_ready() -> bool:
     return False
 
 
-# PARTE 2: Logging Strutturato per Backend Analytics
+# ============================================
+# FUNZIONE DEDICATA: GENERAZIONE RISPOSTA AI
+# ============================================
+def generate_ai_reply(prompt_text: str) -> Optional[str]:
+    """
+    V6.0: Funzione dedicata per generare risposta AI.
+    Usata sia da input testuale che da bottoni survey.
+    
+    Args:
+        prompt_text: Testo input utente (da chat o da bottone)
+    
+    Returns:
+        str: Risposta AI generata, None se errore
+    """
+    try:
+        # Sanificazione input
+        user_input = DataSecurity.sanitize_input(prompt_text)
+        
+        # ============================================
+        # 🆕 MEDICAL INTENT DETECTION
+        # ============================================
+        is_first_message = len(st.session_state.messages) == 0
+        
+        if is_first_message:
+            try:
+                from ui_components import detect_medical_intent
+                st.session_state.medical_intent_detected = detect_medical_intent(user_input, orchestrator)
+                if st.session_state.medical_intent_detected:
+                    logger.info("🩺 Medical intent detected - activating triage mode")
+            except ImportError:
+                st.session_state.medical_intent_detected = True
+        
+        # ============================================
+        # 🆕 FSM: CLASSIFICAZIONE PRIMO MESSAGGIO
+        # ============================================
+        if FSM_ENABLED and is_first_message:
+            urgency_score = classify_initial_urgency_fsm(user_input)
+            
+            if urgency_score:
+                if urgency_score.requires_immediate_118:
+                    st.session_state.emergency_level = EmergencyLevel.RED
+                    render_emergency_overlay(EmergencyLevel.RED)
+                    logger.critical(f"🚨 118 IMMEDIATO rilevato da FSM")
+                elif urgency_score.assigned_path == TriagePath.B and urgency_score.assigned_branch == TriageBranch.INFORMAZIONI:
+                    st.info("ℹ️ Rilevata richiesta informativa su salute mentale")
+                elif urgency_score.assigned_path == TriagePath.A:
+                    st.session_state.triage_path = "A"
+                    st.warning(f"⚠️ Percorso Emergenza attivato | Urgenza: {urgency_score.score}/5")
+        
+        # Check Emergenza Immediata (Text-based Legacy)
+        emergency_level = assess_emergency_level(user_input, {})
+        if emergency_level:
+            st.session_state.emergency_level = emergency_level
+            render_emergency_overlay(emergency_level)
+        
+        # Aggiungi messaggio utente alla cronologia
+        st.session_state.messages.append({
+            "role": "user",
+            "content": user_input
+        })
+        
+        # Parametri dinamici dallo stato
+        current_phase = PHASES[st.session_state.current_phase_idx]
+        phase_id = current_phase["id"]
+        path = st.session_state.get('triage_path', 'C')
+        is_first = len(st.session_state.messages) == 1
+        
+        # Get SIRAYA bot avatar
+        try:
+            from ui_components import get_bot_avatar
+            bot_avatar = get_bot_avatar()
+        except ImportError:
+            bot_avatar = "🩺"
+        
+        # Chiamata streaming con visualizzazione
+        with st.chat_message("assistant", avatar=bot_avatar):
+            placeholder = st.empty()
+            typing = st.empty()
+            typing.markdown('<div class="typing-indicator">🔄 Analisi in corso...</div>', unsafe_allow_html=True)
+            
+            res_gen = stream_ai_response(
+                orchestrator,
+                st.session_state.messages,
+                path,
+                phase_id,
+                collected_data=st.session_state.collected_data,
+                is_first_message=is_first
+            )
+            
+            typing.empty()
+            
+            # Consuma generatore con visualizzazione
+            ai_response = ""
+            final_obj = None
+            for chunk in res_gen:
+                if isinstance(chunk, dict):
+                    final_obj = chunk
+                    ai_response = chunk.get("testo", "")
+                    if ai_response:
+                        placeholder.markdown(ai_response)
+                elif isinstance(chunk, str):
+                    ai_response += chunk
+                    placeholder.markdown(ai_response)
+                elif hasattr(chunk, 'model_dump'):
+                    final_obj = chunk.model_dump()
+                    ai_response = final_obj.get("testo", "")
+                    if ai_response:
+                        placeholder.markdown(ai_response)
+        
+        # Salva risposta AI in cronologia
+        if ai_response:
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": ai_response
+            })
+            logger.info(f"✅ Risposta AI generata: {len(ai_response)} caratteri")
+        else:
+            fallback_msg = "Mi dispiace, non ho ricevuto una risposta valida. Riprova."
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": fallback_msg
+            })
+            logger.warning("⚠️ Nessun testo ricevuto dal generatore")
+            return None
+        
+        # Elaborazione Metadati
+        if final_obj:
+            metadata = final_obj.get("metadata", {})
+            if metadata:
+                update_backend_metadata(metadata)
+                
+                # Verifica emergenze dai metadati
+                emergency_level = assess_emergency_level(user_input, metadata)
+                if emergency_level:
+                    st.session_state.emergency_level = emergency_level
+                    render_emergency_overlay(emergency_level)
+            
+            # Gestione Survey
+            if final_obj.get("opzioni"):
+                st.session_state.pending_survey = final_obj
+                logger.info(f"📋 Survey con {len(final_obj['opzioni'])} opzioni")
+            
+            # Estrazione dati automatica
+            dati_estratti = final_obj.get("dati_estratti", {})
+            if dati_estratti and isinstance(dati_estratti, dict):
+                for key, value in dati_estratti.items():
+                    if value:
+                        st.session_state.collected_data[key] = value
+                        logger.info(f"✅ Dato estratto: {key} = {value}")
+        
+        # Auto-advance se dati completi
+        auto_advance_if_ready()
+        
+        return ai_response
+        
+    except Exception as e:
+        logger.error(f"❌ Errore generazione risposta AI: {e}", exc_info=True)
+        return None
+
+
+# ============================================
+# LOGGING INTERACTION-BASED (REAL-TIME)
+# ============================================
+def save_interaction_log(user_input: str, bot_response: str):
+    """
+    V6.0: Salva ogni interazione in formato flat JSON (interaction-based).
+    Chiamata dopo ogni risposta AI per visibilità real-time nella dashboard.
+    
+    Schema flat:
+    {
+        "session_id": "...",
+        "timestamp": "...",
+        "user_input": "...",
+        "bot_response": "...",
+        "metadata": {...}
+    }
+    """
+    if not st.session_state.get("privacy_accepted", False):
+        return
+    
+    try:
+        session_id = st.session_state.get('session_id', f"unknown_{int(time.time())}")
+        timestamp = datetime.now().isoformat()
+        
+        # Estrai metadati rilevanti
+        current_step = st.session_state.get('current_step', TriageStep.LOCATION)
+        metadata = {
+            "step": current_step.name if hasattr(current_step, 'name') else str(current_step),
+            "specialization": st.session_state.get('specialization', 'Generale'),
+            "urgency_level": st.session_state.collected_data.get('DISPOSITION', {}).get('urgency', 3),
+            "location": st.session_state.collected_data.get('LOCATION'),
+            "version": "interaction-1.0"
+        }
+        
+        # Log entry flat
+        log_entry = {
+            "session_id": session_id,
+            "timestamp": timestamp,
+            "user_input": user_input,
+            "bot_response": bot_response,
+            "metadata": metadata
+        }
+        
+        # Scrittura atomica thread-safe
+        import threading
+        _interaction_lock = threading.Lock()
+        
+        with _interaction_lock:
+            with open(LOG_FILE, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+                f.flush()
+                os.fsync(f.fileno())
+        
+        logger.debug(f"✅ Interaction log salvato: session={session_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Errore salvataggio interaction log: {e}")
+
+
+# PARTE 2: Logging Strutturato per Backend Analytics (Summary - Legacy)
 # SIRAYA 2026 Evolution: Usa LogManager atomico per scrittura thread-safe
 def save_structured_log():
     """
@@ -2780,253 +2999,38 @@ def render_main_application():
             st.session_state.orchestrator_configured = True
             logger.info("✅ Orchestrator configurato con chiavi API")
         
+        # V6.0: Gestione trigger AI da bottoni survey
+        if st.session_state.get("trigger_ai", False):
+            trigger_prompt = st.session_state.get("trigger_ai_prompt", "")
+            if trigger_prompt:
+                logger.info(f"🔄 Trigger AI attivato con prompt: '{trigger_prompt}'")
+                ai_response = generate_ai_reply(trigger_prompt)
+                
+                # Salva interaction log (real-time)
+                if ai_response:
+                    save_interaction_log(trigger_prompt, ai_response)
+                
+                # Reset flag
+                st.session_state.trigger_ai = False
+                st.session_state.trigger_ai_prompt = ""
+                
+                # Rerun per mostrare risposta
+                st.rerun()
+        
         # Input utente
         if raw_input := st.chat_input("Ciao, come posso aiutarti oggi?"):
             # 1. Sanificazione Input
             user_input = DataSecurity.sanitize_input(raw_input)
             
-            # ============================================
-            # 🆕 MEDICAL INTENT DETECTION
-            # ============================================
-            is_first_message = len(st.session_state.messages) == 0
+            # V6.0: Usa generate_ai_reply() per consistenza con bottoni
+            ai_response = generate_ai_reply(user_input)
             
-            # Detect medical intent on first message
-            if is_first_message:
-                try:
-                    from ui_components import detect_medical_intent
-                    st.session_state.medical_intent_detected = detect_medical_intent(user_input, orchestrator)
-                    if st.session_state.medical_intent_detected:
-                        logger.info("🩺 Medical intent detected - activating triage mode")
-                except ImportError:
-                    # Fallback: always assume medical intent
-                    st.session_state.medical_intent_detected = True
+            # V6.0: Salva interaction log (real-time)
+            if ai_response:
+                save_interaction_log(user_input, ai_response)
             
-            # ============================================
-            # 🆕 FSM: CLASSIFICAZIONE PRIMO MESSAGGIO
-            # ============================================
-            
-            if FSM_ENABLED and is_first_message:
-                urgency_score = classify_initial_urgency_fsm(user_input)
-                
-                if urgency_score: 
-                    # A. Se richiede 118 immediato
-                    if urgency_score. requires_immediate_118:
-                        st.session_state.emergency_level = EmergencyLevel.RED
-                        render_emergency_overlay(EmergencyLevel.RED)
-                        logger.critical(f"🚨 118 IMMEDIATO rilevato da FSM | Rationale: {urgency_score.rationale}")
-                    
-                    # B. Se path Mental Health (B) con branch INFO
-                    elif urgency_score.assigned_path == TriagePath.B and urgency_score.assigned_branch == TriageBranch. INFORMAZIONI:
-                        st.info(f"ℹ️ Rilevata richiesta informativa su salute mentale")
-                        logger.info(f"📘 Branch INFORMAZIONI attivato | Rationale: {urgency_score.rationale}")
-                    
-                    # C. Path Emergency (A) - Max 3 domande
-                    elif urgency_score.assigned_path == TriagePath.A: 
-                        st.session_state.triage_path = "A"
-                        st.warning(f"⚠️ Percorso Emergenza attivato | Urgenza: {urgency_score. score}/5")
-                        logger.warning(f"🚨 Path A (Emergency) | Score: {urgency_score.score} | Flags: {urgency_score.detected_red_flags}")
-                    
-                    # D. Estrazione entità con FSM
-                    if st.session_state.get('fsm_bridge'):
-                        extracted_data = st.session_state. fsm_bridge.extract_entities_from_text(user_input)
-                        if extracted_data:
-                            # Sincronizza con TriageState
-                            st.session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
-                                st.session_state.triage_state,
-                                extracted_data
-                            )
-                            logger.info(f"✅ Dati estratti da FSM: {list(extracted_data.keys())}")
-            
-            # 2. Check Emergenza Immediata (Text-based Legacy)
-            emergency_level = assess_emergency_level(user_input, {})
-            if emergency_level:
-                st.session_state.emergency_level = emergency_level
-                render_emergency_overlay(emergency_level)
-            
-            # 3. Aggiungi messaggio utente alla cronologia
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            
-            # ✅ NUOVO: Rilevamento primo messaggio per intent detection
-            is_first = len(st.session_state. messages) == 1
-            
-            # 4. Generazione Risposta AI
-            # Get SIRAYA bot avatar
-            try:
-                from ui_components import get_bot_avatar
-                bot_avatar = get_bot_avatar()
-            except ImportError:
-                bot_avatar = "🩺"
-            
-            with st.chat_message("assistant", avatar=bot_avatar):
-                placeholder = st.empty()
-                typing = st.empty()
-                typing.markdown('<div class="typing-indicator">🔄 Analisi in corso...</div>', unsafe_allow_html=True)
-                
-                # Parametri dinamici dallo stato
-                current_phase = PHASES[st.session_state. current_phase_idx]
-                phase_id = current_phase["id"]
-                path = st.session_state.get('triage_path', 'C')
-                
-                full_text_vis = ""
-                final_obj = None
-                
-                try:
-                    # Chiamata streaming con collected_data per context awareness
-                    res_gen = stream_ai_response(
-                        orchestrator,
-                        st.session_state.messages,
-                        path,
-                        phase_id,
-                        collected_data=st.session_state.collected_data,
-                        is_first_message=is_first
-                    )
-                    
-                    # Rimuovi subito l'indicatore di caricamento
-                    typing.empty()
-                    
-                    # Consumo generatore con logica pulita
-                    for chunk in res_gen:
-                        # CASO A: Dizionario già parsato
-                        if isinstance(chunk, dict):
-                            final_obj = chunk
-                            text_chunk = chunk.get("testo", "")
-                            if text_chunk and not full_text_vis:
-                                full_text_vis = text_chunk
-                                placeholder.markdown(full_text_vis)
-                        
-                        # CASO B:  Stringa (streaming incrementale)
-                        elif isinstance(chunk, str):
-                            full_text_vis += chunk
-                            placeholder.markdown(full_text_vis)
-                        
-                        # CASO C: Oggetti Pydantic V2
-                        elif hasattr(chunk, 'model_dump'):
-                            final_obj = chunk.model_dump()
-                            text_chunk = final_obj.get("testo", "")
-                            if text_chunk: 
-                                full_text_vis = text_chunk
-                                placeholder. markdown(full_text_vis)
-                    
-                    # 5. Salvataggio Risposta AI
-                    if full_text_vis:
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": full_text_vis
-                        })
-                        logger.info(f"✅ Messaggio AI salvato ({len(full_text_vis)} caratteri)")
-                    else:
-                        fallback_msg = "Mi dispiace, non ho ricevuto una risposta valida.  Riprova."
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": fallback_msg
-                        })
-                        placeholder.warning(fallback_msg)
-                        logger.warning("⚠️ Nessun testo ricevuto dal generatore")
-                    
-                    # 6. Elaborazione Metadati
-                    if final_obj:
-                        metadata = final_obj.get("metadata", {})
-                        
-                        if metadata: 
-                            # Sincronizzazione stato backend
-                            update_backend_metadata(metadata)
-                            
-                            # ============================================
-                            # 🆕 FSM: SINCRONIZZAZIONE DATI
-                            # ============================================
-                            if FSM_ENABLED and st.session_state.get('fsm_bridge') and st.session_state.get('triage_state'):
-                                try:
-                                    # A. Estrai dati dal testo AI se presenti
-                                    if full_text_vis: 
-                                        fsm_extracted = st.session_state.fsm_bridge.extract_entities_from_text(full_text_vis)
-                                        if fsm_extracted:
-                                            # Sincronizza con TriageState
-                                            st.session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
-                                                st.session_state.triage_state,
-                                                fsm_extracted
-                                            )
-                                    
-                                    # B.  Sincronizza collected_data legacy con FSM
-                                    if st.session_state.collected_data:
-                                        st.session_state.triage_state = st.session_state.fsm_bridge.sync_session_context(
-                                            st.session_state.triage_state,
-                                            st.session_state.collected_data
-                                        )
-                                    
-                                    # C. Verifica completezza triage
-                                    validation = st.session_state.fsm_bridge.validate_triage_completeness(
-                                        st.session_state. triage_state
-                                    )
-                                    
-                                    if validation['can_proceed_disposition'] and not validation['is_complete']:
-                                        logger. info(f"⚠️ Triage parziale ma sufficiente per disposition | "
-                                                   f"Completezza: {validation['completion_percentage']:.1%}")
-                                
-                                except Exception as e:
-                                    logger.error(f"❌ Errore sincronizzazione FSM: {e}", exc_info=True)
-                            
-                            # Verifica emergenze dai metadati
-                            emergency_level = assess_emergency_level(user_input, metadata)
-                            if emergency_level:
-                                st.session_state.emergency_level = emergency_level
-                                render_emergency_overlay(emergency_level)
-                            
-                            # Gestione Protocolli Critici
-                            kb_ref = metadata.get("kb_reference", "")
-                            if kb_ref:
-                                st.session_state.kb_reference = kb_ref
-                                logger. info(f"📄 Protocollo rilevato:  {kb_ref}")
-                                
-                                critical_protocols = ["DA5", "ASQ", "WAST", "AUDIT"]
-                                if any(protocol in kb_ref for protocol in critical_protocols):
-                                    logger.warning(f"🚨 Protocollo critico:  {kb_ref}")
-                                    if not st.session_state.get('emergency_level'):
-                                        st.session_state.emergency_level = EmergencyLevel. ORANGE
-                                    render_emergency_overlay(st.session_state.emergency_level)
-                        
-                        # 7. Gestione Survey
-                        if final_obj.get("opzioni"):
-                            st.session_state.pending_survey = final_obj
-                            logger.info(f"📋 Survey con {len(final_obj['opzioni'])} opzioni")
-                        
-                        # 7b. Estrazione automatica dati multipli
-                        dati_estratti = final_obj.get("dati_estratti", {})
-                        if dati_estratti and isinstance(dati_estratti, dict):
-                            for key, value in dati_estratti.items():
-                                if value: 
-                                    st.session_state.collected_data[key] = value
-                                    logger. info(f"✅ Dato estratto automaticamente: {key} = {value}")
-                            
-                            # Check auto-advancement dopo estrazione dati
-                            auto_advance_if_ready()
-                        
-                        # FIX BUG #2: Salvataggio fallback per RED_FLAGS
-                        if st.session_state.current_step == TriageStep. RED_FLAGS:
-                            if 'RED_FLAGS' not in st.session_state. collected_data:
-                                last_user_msg = next(
-                                    (m['content'] for m in reversed(st.session_state.messages) if m.get('role') == 'user'),
-                                    None
-                                )
-                                if last_user_msg:
-                                    st.session_state.collected_data['RED_FLAGS'] = last_user_msg
-                                    logger.info(f"✅ RED_FLAGS salvato da risposta testuale:  {last_user_msg}")
-                                    auto_advance_if_ready()
-                    
-                    # 8. Auto-sync session to storage (NUOVO)
-                    auto_sync_session_storage()
-                    
-                    # 9. Rerun
-                    st.rerun()
-                
-                except Exception as e:
-                    logger.error(f"❌ Errore critico: {e}", exc_info=True)
-                    error_msg = "Si è verificato un errore di comunicazione con l'AI. Riprova."
-                    placeholder.error(error_msg)
-                    st.session_state. messages.append({
-                        "role": "assistant",
-                        "content": "⚠️ " + error_msg
-                    })
-                    st.session_state.pending_survey = None
+            # Rerun per mostrare risposta
+            st.rerun()
 
     # STEP 7: Rendering opzioni survey (se presenti)
     if st.session_state.get("pending_survey"):
@@ -3095,61 +3099,21 @@ def render_main_application():
                 st.session_state.pending_survey = None
                 
                 if validation_success:
-                    # 🔧 FIX V5.0: FLUSSO ATOMICO - Pressione -> Dati -> Advance -> AI -> Rerun
-                    # STEP 1: Avanza step PRIMA di chiamare AI (così l'AI sa lo step corrente)
+                    # 🔧 FIX V6.0: FLUSSO ATOMICO - Pressione -> Dati -> Advance -> Trigger AI
+                    # STEP 1: Avanza step PRIMA di chiamare AI
                     advance_success = advance_step()
                     
                     if advance_success:
-                        # STEP 2: Chiama AI con stato aggiornato (step già avanzato)
-                        try:
-                            current_phase = PHASES[st.session_state.current_phase_idx]
-                            phase_id = current_phase["id"]
-                            path = st.session_state.get('triage_path', 'C')
-                            
-                            # Chiama orchestratore per generare prossima risposta
-                            res_gen = stream_ai_response(
-                                orchestrator,
-                                st.session_state.messages,
-                                path,
-                                phase_id,
-                                collected_data=st.session_state.collected_data,
-                                is_first_message=False
-                            )
-                            
-                            # Consuma generatore per ottenere risposta
-                            ai_response = ""
-                            final_obj = None
-                            for chunk in res_gen:
-                                if isinstance(chunk, dict):
-                                    final_obj = chunk
-                                    ai_response = chunk.get("testo", "")
-                                elif isinstance(chunk, str):
-                                    ai_response += chunk
-                                elif hasattr(chunk, 'model_dump'):
-                                    final_obj = chunk.model_dump()
-                                    ai_response = final_obj.get("testo", "")
-                            
-                            # STEP 3: Salva risposta AI in cronologia
-                            if ai_response:
-                                st.session_state.messages.append({
-                                    "role": "assistant",
-                                    "content": ai_response
-                                })
-                                logger.info(f"✅ Risposta AI generata da pulsante: {len(ai_response)} caratteri")
-                            
-                            # Sincronizza metadati se presenti
-                            if final_obj and final_obj.get("metadata"):
-                                update_backend_metadata(final_obj["metadata"])
-                            
-                        except Exception as e:
-                            logger.error(f"❌ Errore chiamata orchestratore da pulsante: {e}")
-                            # Continua comunque - lo step è già avanzato
+                        # STEP 2: Imposta flag trigger_ai per generare risposta nel ciclo successivo
+                        st.session_state.trigger_ai = True
+                        st.session_state.trigger_ai_prompt = opt  # Salva testo opzione
+                        logger.info(f"✅ Bottone cliccato: trigger_ai impostato con prompt '{opt}'")
                         
-                        # STEP 4: Rerun finale per mostrare risposta AI e aggiornare UI
+                        # STEP 3: Rerun immediato per scatenare generazione AI
                         st.rerun()
                     else:
                         logger.warning("⚠️ Avanzamento step fallito - dati non completi")
-                        st.rerun()  # Rerun comunque per aggiornare UI
+                        st.rerun()
     
     # Gestione input personalizzato "Altro"
     if st.session_state.get("show_altro"):
