@@ -2300,7 +2300,7 @@ def render_disposition_summary():
         st.markdown(f"""
         **👤 Età:** {collected.get('age', 'Non specificata')} anni  
         **🚨 Red Flags:** {red_flags_display}  
-        **⚡ Livello Urgenza:** {avg_urgency:. 1f}/5.0
+        **⚡ Livello Urgenza:** {avg_urgency:.1f}/5.0
         """)
     
     st.divider()
