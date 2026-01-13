@@ -252,9 +252,35 @@ st.markdown("""
         border: 1px solid #e5e7eb;
     }
     
-    /* Sidebar Styling */
-    .css-1d391kg { /* Sidebar */
-        background-color: #f9fafb;
+    /* Sidebar Styling - Light background with better contrast */
+    section[data-testid="stSidebar"] {
+        background-color: #F8F9FA !important;
+    }
+    
+    section[data-testid="stSidebar"] .stButton > button {
+        background-color: #ffffff !important;
+        color: #1f2937 !important;
+        border: 1px solid #e5e7eb !important;
+        font-weight: 500 !important;
+    }
+    
+    section[data-testid="stSidebar"] .stButton > button:hover {
+        background-color: #f3f4f6 !important;
+        border-color: #d1d5db !important;
+    }
+    
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+        background-color: #3b82f6 !important;
+        color: #ffffff !important;
+        border-color: #3b82f6 !important;
+    }
+    
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
+        background-color: #2563eb !important;
+    }
+    
+    section[data-testid="stSidebar"] * {
+        color: #1f2937 !important;
     }
     
     /* Hide Streamlit branding */
@@ -1843,6 +1869,9 @@ def text_to_speech_button(text: str, key: str, auto_play: bool = False):
         clean_text = clean_text[:497] + "..."
         logger.warning(f"Testo TTS troncato per la chiave={key}")
     
+    # Use st.components.v1.html to properly inject JavaScript without showing code as text
+    import streamlit.components.v1 as components
+    
     tts_html = f"""
     <div style='display: inline-block; margin: 5px 0;'>
         <button id='tts-btn-{key}' onclick='speakText_{key}()'
@@ -1904,7 +1933,7 @@ def text_to_speech_button(text: str, key: str, auto_play: bool = False):
         {f'setTimeout(() => speakText_{key}(), 500);' if auto_play else ''}
     </script>
     """
-    st.markdown(tts_html, unsafe_allow_html=True)
+    components.html(tts_html, height=50)
     logger.debug(f"TTS caricato per key={key} (auto_play={auto_play})")
 
 # PARTE 3: Schermata Recap e Raccomandazione Finale
@@ -2610,8 +2639,8 @@ def render_main_application():
         bot_avatar = "🩺"
     
     for i, m in enumerate(st.session_state.messages):
-        # Use custom avatar for assistant messages
-        avatar = bot_avatar if m["role"] == "assistant" else None
+        # Use standard avatars: 👤 for user, 🩺 for assistant
+        avatar = bot_avatar if m["role"] == "assistant" else "👤"
         with st.chat_message(m["role"], avatar=avatar):
             st.markdown(m["content"])
             
