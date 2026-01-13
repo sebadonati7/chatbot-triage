@@ -1459,7 +1459,7 @@ def generate_ai_reply(prompt_text: str) -> Optional[str]:
             typing.markdown('<div class="typing-indicator">🔄 Analisi in corso...</div>', unsafe_allow_html=True)
             
             res_gen = stream_ai_response(
-                orchestrator,
+                st.session_state.orchestrator,
                 st.session_state.messages,
                 path,
                 phase_id,
