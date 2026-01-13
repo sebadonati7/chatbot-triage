@@ -1372,10 +1372,17 @@ def auto_advance_if_ready() -> bool:
 
 
 # PARTE 2: Logging Strutturato per Backend Analytics
+# SIRAYA 2026 Evolution: Usa LogManager atomico per scrittura thread-safe
 def save_structured_log():
     """
     Salva log sessione in formato strutturato JSON per analytics.
     Schema version "2.0" ottimizzato per l'analisi clinica.
+    
+    SIRAYA 2026 Evolution:
+    - Usa LogManager atomico per thread-safety
+    - Timestamp ISO 8601 generato AL MOMENTO DELLA SCRITTURA (2026)
+    - Validazione schema integrata
+    - Zero Pandas Policy: solo dict, list, json
     """
     # Verifica consenso (allineato con privacy_accepted dello session_state)
     if not st.session_state.get("privacy_accepted", False):
@@ -1383,15 +1390,23 @@ def save_structured_log():
         return
     
     try:
-        session_end = datetime.now()
-        session_start = st.session_state.session_start
-        total_duration = (session_end - session_start).total_seconds()
+        # Import LogManager
+        try:
+            from utils.log_manager import get_log_manager
+            log_manager = get_log_manager(LOG_FILE)
+        except ImportError:
+            logger.warning("⚠️ LogManager non disponibile, uso fallback diretto")
+            log_manager = None
+        
+        # Calcola durata sessione (usa timestamp corrente per timestamp_end)
+        session_start = st.session_state.get('session_start', datetime.now())
+        total_duration = (datetime.now() - session_start).total_seconds()
         
         # 1. Ricostruzione cronologia degli step con durate
         steps_data = []
         for step in TriageStep:
             step_name = step.name
-            if step_name in st.session_state.step_timestamps:
+            if step_name in st.session_state.get('step_timestamps', {}):
                 ts_data = st.session_state.step_timestamps[step_name]
                 duration = (ts_data['end'] - ts_data['start']).total_seconds()
                 steps_data.append({
@@ -1411,7 +1426,7 @@ def save_structured_log():
             "location": st.session_state.collected_data.get('LOCATION')
         }
         
-        # 3. Esito (Disposition)
+        # 3. Esito (Disposition) - Assicura urgency_level sempre presente
         disposition_data = st.session_state.collected_data.get('DISPOSITION', {})
         outcome = {
             "disposition": disposition_data.get('type', 'Non Completato'),
@@ -1423,20 +1438,12 @@ def save_structured_log():
         
         # 4. Metadati tecnici
         metadata = {
-            "specialization": st.session_state.specialization,
-            "emergency_triggered": st.session_state.emergency_level is not None,
-            "emergency_level": st.session_state.emergency_level.name if st.session_state.emergency_level else None,
-            "ai_fallback_used": any("fallback" in str(m) for m in st.session_state.metadata_history),
-            "total_messages": len(st.session_state.messages)
+            "specialization": st.session_state.get('specialization', 'Generale'),
+            "emergency_triggered": st.session_state.get('emergency_level') is not None,
+            "emergency_level": st.session_state.emergency_level.name if st.session_state.get('emergency_level') else None,
+            "ai_fallback_used": any("fallback" in str(m) for m in st.session_state.get('metadata_history', [])),
+            "total_messages": len(st.session_state.get('messages', []))
         }
-        
-        # 5. Assemblaggio Log Entry finale
-        # FIX: Assicura formato ISO 8601 con anno corrente (2026) e campi obbligatori
-        session_id = st.session_state.get('session_id', f"unknown_{int(time.time())}")
-        
-        # Timestamp ISO 8601 esplicito (forza anno 2026 se necessario)
-        ts_start = session_start.isoformat()
-        ts_end = session_end.isoformat()
         
         # Verifica che urgency_level sia sempre presente in outcome
         if 'urgency_level' not in outcome or outcome['urgency_level'] == 0:
@@ -1453,13 +1460,18 @@ def save_structured_log():
             user_input = " | ".join(user_messages[:3]) if user_messages else ""  # Primi 3 messaggi utente
             bot_response = " | ".join(bot_messages[-1:]) if bot_messages else ""  # Ultimo messaggio bot
         
+        # 5. Assemblaggio Log Entry (SENZA timestamp_end - sarà generato da LogManager)
+        session_id = st.session_state.get('session_id', f"unknown_{int(time.time())}")
+        
+        # IMPORTANTE: timestamp_start può essere pre-generato, ma timestamp_end
+        # sarà generato AL MOMENTO DELLA SCRITTURA da LogManager (2026)
         log_entry = {
             "session_id": session_id,
-            "timestamp_start": ts_start,
-            "timestamp_end": ts_end,
+            "timestamp_start": session_start.isoformat(),  # Può essere storico
+            # timestamp_end sarà aggiunto da LogManager.write_log() al momento scrittura
             "total_duration_seconds": round(total_duration, 2),
-            "user_input": user_input,  # Aggiunto per compatibilità
-            "bot_response": bot_response,  # Aggiunto per compatibilità
+            "user_input": user_input,
+            "bot_response": bot_response,
             "steps": steps_data,
             "clinical_summary": clinical_summary,
             "outcome": outcome,  # Deve contenere urgency_level
@@ -1467,35 +1479,55 @@ def save_structured_log():
             "version": "2.0"
         }
         
-        # === SCRITTURA THREAD-SAFE CON FALLBACK ATOMICO ===
-        # FIX: Backend sync fail-safe - salvataggio locale sempre attivo
+        # === SCRITTURA ATOMICA CON LOGMANAGER ===
         write_success = False
         
-        try:
-            from backend import TriageDataStore
-            success = TriageDataStore.append_record_thread_safe(LOG_FILE, log_entry)
+        if log_manager:
+            # Usa LogManager atomico (timestamp_end generato al momento scrittura)
+            write_success = log_manager.write_log(log_entry, force_timestamp=True)
             
-            if success:
-                write_success = True
-                logger.info(f"✅ Structured log 2.0 salvato (thread-safe): session={session_id}")
+            if write_success:
+                logger.info(f"✅ Structured log 2.0 salvato (LogManager atomico): session={session_id}")
             else:
-                logger.warning(f"⚠️ Validazione schema fallita, tentativo fallback locale")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Errore salvataggio thread-safe: {e}, tentativo fallback locale")
+                logger.warning(f"⚠️ LogManager validazione fallita per session={session_id}")
         
-        # FALLBACK ATOMICO: Scrittura diretta sempre come backup
+        # FALLBACK: Se LogManager non disponibile o fallisce, usa TriageDataStore
+        if not write_success:
+            try:
+                from backend import TriageDataStore
+                # Aggiungi timestamp_end manualmente per compatibilità
+                log_entry['timestamp_end'] = datetime.now().isoformat()
+                success = TriageDataStore.append_record_thread_safe(LOG_FILE, log_entry)
+                
+                if success:
+                    write_success = True
+                    logger.info(f"✅ Structured log 2.0 salvato (TriageDataStore): session={session_id}")
+                else:
+                    logger.warning(f"⚠️ TriageDataStore validazione fallita")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Errore TriageDataStore: {e}")
+        
+        # FALLBACK FINALE: Scrittura diretta atomica (sempre come ultima risorsa)
         if not write_success:
             try:
                 # Assicura che la directory esista
                 os.makedirs(os.path.dirname(LOG_FILE) if os.path.dirname(LOG_FILE) else '.', exist_ok=True)
                 
-                with open(LOG_FILE, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
-                    f.flush()
-                    os.fsync(f.fileno())  # Force write to disk
+                # Aggiungi timestamp_end al momento scrittura (2026)
+                log_entry['timestamp_end'] = datetime.now().isoformat()
                 
-                logger.info(f"✅ Log salvato con fallback atomico locale: session={session_id}")
+                # Scrittura diretta con lock manuale (thread-safe)
+                import threading
+                _direct_write_lock = threading.Lock()
+                
+                with _direct_write_lock:
+                    with open(LOG_FILE, 'a', encoding='utf-8') as f:
+                        f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+                        f.flush()
+                        os.fsync(f.fileno())
+                
+                logger.info(f"✅ Log salvato con fallback diretto atomico: session={session_id}")
                 write_success = True
                 
             except Exception as fallback_error:
