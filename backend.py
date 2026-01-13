@@ -37,7 +37,10 @@ except ImportError:
     # Warning mostrato in main() per non violare order rule
 
 # === COSTANTI ===
-# Cloud-ready: Usa env var per path log persistente
+# V5.0: Path log unificato - identico a frontend.py per garantire coerenza
+# Cloud-ready: Usa env var per path log persistente, ma default identico a frontend
+# Entrambi i file (frontend.py e backend.py) usano os.path.dirname(os.path.abspath(__file__))
+# quindi puntano alla stessa directory root del progetto
 LOG_DIR = os.environ.get("TRIAGE_LOGS_DIR", os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(LOG_DIR, exist_ok=True)  # Crea directory se non esiste
 LOG_FILE = os.path.join(LOG_DIR, "triage_logs.jsonl")
@@ -974,7 +977,7 @@ def main():
     # Early return se nessun dato
     if not datastore.records:
         st.warning("⚠️ Nessun dato disponibile. Inizia una chat per popolare i log.")
-        st.info("💡 Avvia `frontend.py` sulla porta 8501 per generare dati di triage.")
+        st.info("💡 Avvia il **Chatbot Triage** tramite `app.py` per generare dati di triage.")
         return
     
     # === SIDEBAR: FILTRI ===

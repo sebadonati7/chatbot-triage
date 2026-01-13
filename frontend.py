@@ -42,9 +42,8 @@ try:
     )
     from bridge import TriageSessionBridge
     from smart_router import SmartRouter, UrgencyScore
-    from utils.id_manager import IDManager
-    # NOTE: SymptomNormalizer is now part of model_orchestrator_v2.py
-    
+    from id_manager import IDManager, get_new_session_id
+    from log_manager import LogManager, get_log_manager
     FSM_ENABLED = True
     logger.info("✅ Moduli FSM caricati con successo (PR #7)")
 except ImportError as e:
@@ -299,7 +298,9 @@ MODEL_CONFIG = {
     "fallback": "gemini-2.5-flash" 
 }
 
-LOG_FILE = "triage_logs.jsonl"
+# Path log file: assoluto relativo alla root del progetto (compatibile con backend.py)
+# V4.0: Modernizzazione architetturale - path assoluto per garantire coerenza
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "triage_logs.jsonl")
 
 PHASES = [
     {"id": "IDENTIFICATION", "name": "Identificazione", "icon": "👤"},
@@ -1064,8 +1065,13 @@ def render_header(current_phase=None):
     logger.info(f"Header renderizzato con successo per lo step {current_step.name} (Valore: {current_step.value})")
 
 def render_sidebar(pharmacy_db):
+    """
+    V5.0: Sidebar riscritta completamente con HTML/CSS/Container.
+    Zero widget nativi complessi (st.expander) per eliminare glitch grafici.
+    Solo emoji per icone.
+    """
     with st.sidebar:
-        # SIRAYA Branding
+        # === BRANDING SIRAYA ===
         st.markdown("""
         <div style="text-align: center; padding: 20px 0;">
             <div style="font-size: 2em; font-weight: 300; letter-spacing: 0.15em; color: #4A90E2;">
@@ -1079,32 +1085,37 @@ def render_sidebar(pharmacy_db):
         
         st.divider()
         
-        # Professional buttons with icons
+        # === BOTTONI AZIONE ===
         if st.button("🔄 Nuova Sessione", use_container_width=True, key="sidebar_new_session"):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
         
-        # Only show triage button if medical intent detected
         if st.session_state.get('medical_intent_detected', False):
             if st.button("📋 Modalità Triage", use_container_width=True, key="sidebar_triage_mode", type="primary"):
                 st.session_state.triage_mode_active = True
                 st.info("Modalità triage attivata")
-            
+        
         if st.button("🆘 Emergenza 118", use_container_width=True, key="sidebar_sos_gps"):
             st.error("⚠️ PER EMERGENZE MEDICHE CHIAMARE IL 118")
-            st.session_state.backend.sync({"event": "SOS_GPS_REQUEST"})
         
         st.divider()
+        
+        # === PROGRESSO TRIAGE ===
         current_phase = PHASES[st.session_state.current_phase_idx]
         st.markdown(f"**Specializzazione Backend:** `{st.session_state.specialization}`")
         st.progress((st.session_state.current_phase_idx + 1) / len(PHASES))
         
-        # PARTE 2: RICERCA SERVIZI (VERSIONE OTTIMIZZATA) ---
-        with st.expander("📍 Ricerca Servizi e Strutture"):
-            st.markdown("<small>Scrivi il servizio o la specialità (es. *Ginecologia* o *Visita*).</small>", unsafe_allow_html=True)
+        # === RICERCA SERVIZI - HTML/CSS Container (NO st.expander) ===
+        st.markdown("---")
+        with st.container():
+            st.markdown("""
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 10px;">
+                <h4 style="margin: 0 0 10px 0; color: #1f2937;">📍 Ricerca Servizi e Strutture</h4>
+                <p style="font-size: 0.85em; color: #6b7280; margin: 0;">Scrivi il servizio o la specialità (es. Ginecologia o Visita).</p>
+            </div>
+            """, unsafe_allow_html=True)
             
-            # A. Input Comune (Prende il valore dal triage se l'utente lo ha già inserito)
             c_input = st.text_input(
                 "In quale comune?", 
                 key="sidebar_geo_comune", 
@@ -1112,7 +1123,6 @@ def render_sidebar(pharmacy_db):
                 placeholder="es. Cento"
             )
             
-            # B. Selezione Servizio (Tendina con ricerca dinamica integrata)
             s_input = st.selectbox(
                 "Di cosa hai bisogno?",
                 options=st.session_state.get('service_catalog', ["Caricamento..."]),
@@ -1121,7 +1131,6 @@ def render_sidebar(pharmacy_db):
                 placeholder="Cerca servizio o prestazione..."
             )
             
-            # C. Pulsante di Esecuzione
             if st.button("🔍 Cerca e Invia in Chat", use_container_width=True, key="exec_search_btn"):
                 if not c_input or not s_input:
                     st.warning("⚠️ Per favore, inserisci sia il comune che il servizio.")
@@ -1130,7 +1139,6 @@ def render_sidebar(pharmacy_db):
                         found = find_facilities_smart(s_input, c_input)
                     
                     if found:
-                        # 1. Messaggio professionale per la chat
                         msg = f"### 📍 Risultati per: {s_input}\n"
                         msg += f"Analisi territoriale effettuata per il comune di: **{c_input}**\n\n---\n"
                         
@@ -1144,18 +1152,21 @@ def render_sidebar(pharmacy_db):
                             msg += f"📍 {r['indirizzo']} ({r['comune']})\n"
                             msg += f"📞 {tel} | [🚗 Apri Navigatore Maps]({link})\n\n"
                         
-                        # 2. Aggiunta alla cronologia chat
                         st.session_state.messages.append({"role": "assistant", "content": msg})
                         st.success("✅ Strutture inviate nella chat!")
                         st.rerun()
                     else:
                         st.error("❌ Nessuna struttura trovata in questa zona.")
-
-        # PARTE 3: Expander Accessibilità
-        st.divider()
         
-        with st.expander("♿ Impostazioni Accessibilità"):
-            st.markdown("**Personalizza l'interfaccia**")
+        # === IMPOSTAZIONI ACCESSIBILITÀ - HTML/CSS Container (NO st.expander) ===
+        st.markdown("---")
+        with st.container():
+            st.markdown("""
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px;">
+                <h4 style="margin: 0 0 10px 0; color: #1f2937;">♿ Impostazioni Accessibilità</h4>
+                <p style="font-size: 0.85em; color: #6b7280; margin: 0 0 15px 0;">Personalizza l'interfaccia</p>
+            </div>
+            """, unsafe_allow_html=True)
             
             high_contrast = st.checkbox(
                 "Contrasto Elevato",
@@ -1171,7 +1182,6 @@ def render_sidebar(pharmacy_db):
                     .stButton>button { background-color: #ffffff !important; color: #000000 !important; }
                 </style>
                 """, unsafe_allow_html=True)
-                logger.info("High contrast mode activated")
             
             font_size = st.select_slider(
                 "Dimensione Testo",
@@ -1180,7 +1190,7 @@ def render_sidebar(pharmacy_db):
                 key='font_size'
             )
             
-            font_size_map = {"Piccolo": "0.9em", "Normale": "1.0em", "Grande": "1.2em", "Molto Grande":  "1.5em"}
+            font_size_map = {"Piccolo": "0.9em", "Normale": "1.0em", "Grande": "1.2em", "Molto Grande": "1.5em"}
             st.markdown(f"""
             <style>
                 .stMarkdown, .stText, .stChatMessage {{ font-size: {font_size_map[font_size]} !important; }}
@@ -1193,9 +1203,6 @@ def render_sidebar(pharmacy_db):
                 key='auto_speech',
                 help="Legge automaticamente ogni risposta del bot"
             )
-            
-            if auto_speech:
-                st.info("🔊 Lettura automatica attiva")
             
             reduce_motion = st.checkbox(
                 "Riduci Animazioni",
@@ -1751,8 +1758,9 @@ def render_progress_bar():
 
 def render_dynamic_step_tracker():
     """
-    ✅ NUOVO: Stepper a tendine che mostra dati raccolti
-    Sostituisce il box singolo con una riga di step interattivi
+    V5.0: Step tracker riscritto completamente con HTML/CSS/Container.
+    Zero widget nativi complessi (st.expander) per eliminare glitch grafici.
+    Solo emoji per icone.
     """
     st.markdown("---")
     st.markdown("### 📋 Avanzamento Triage")
@@ -1770,36 +1778,36 @@ def render_dynamic_step_tracker():
             "id": "CHIEF_COMPLAINT",
             "emoji": "🩺",
             "label": "Sintomi",
-            "key_data":  "CHIEF_COMPLAINT",
+            "key_data": "CHIEF_COMPLAINT",
             "format_fn": lambda x: f"Disturbo: **{x}**"
         },
         {
             "id": "PAIN_SCALE",
             "emoji": "📊",
-            "label":  "Dolore",
+            "label": "Dolore",
             "key_data": "PAIN_SCALE",
             "format_fn": lambda x: f"Intensità: **{x}/10**"
         },
         {
             "id": "RED_FLAGS",
-            "emoji":  "🚨",
+            "emoji": "🚨",
             "label": "Urgenza",
             "key_data": "RED_FLAGS",
-            "format_fn": lambda x:  f"Segnali: **{', '.join(x) if isinstance(x, list) else x}**" if x else "Nessuno"
+            "format_fn": lambda x: f"Segnali: **{', '.join(x) if isinstance(x, list) else x}**" if x else "Nessuno"
         },
         {
             "id": "ANAMNESIS",
-            "emoji":  "📋",
+            "emoji": "📋",
             "label": "Anamnesi",
             "key_data": "age",
-            "format_fn":  lambda x: f"Età:  **{x} anni**"
+            "format_fn": lambda x: f"Età: **{x} anni**"
         },
         {
-            "id":  "DISPOSITION",
+            "id": "DISPOSITION",
             "emoji": "🏥",
             "label": "Esito",
             "key_data": "DISPOSITION",
-            "format_fn": lambda x: f"Raccomandazione: **{x. get('type', 'In corso.. .')}**" if isinstance(x, dict) else str(x)
+            "format_fn": lambda x: f"Raccomandazione: **{x.get('type', 'In corso...')}**" if isinstance(x, dict) else str(x)
         }
     ]
     
@@ -1813,10 +1821,24 @@ def render_dynamic_step_tracker():
         with cols[i]:
             data_value = collected.get(step['key_data'])
             
-            # ✅ CASO 1: Dato presente → Tendina verde
-            if data_value: 
-                with st.expander(f"✅ {step['emoji']} {step['label']}", expanded=False):
-                    st.markdown(step['format_fn'](data_value))
+            # ✅ CASO 1: Dato presente → Box verde con HTML/CSS (NO st.expander)
+            if data_value:
+                # Container HTML/CSS per step completato
+                with st.container():
+                    st.markdown(f"""
+                    <div style='
+                        background-color: #d1fae5;
+                        border: 2px solid #10b981;
+                        border-radius: 10px;
+                        padding: 12px;
+                        text-align: center;
+                        margin-bottom: 8px;
+                    '>
+                        <div style='font-size: 1.8em;'>{step['emoji']}</div>
+                        <div style='font-weight: 600; margin-top: 5px; color: #065f46;'>{step['label']}</div>
+                        <div style='font-size: 0.75em; margin-top: 8px; color: #047857;'>{step['format_fn'](data_value)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
                     # Bottone reset (solo se non siamo in DISPOSITION finale)
                     if step['id'] != 'DISPOSITION':
@@ -1825,16 +1847,16 @@ def render_dynamic_step_tracker():
                             key=f"reset_{step['id']}",
                             use_container_width=True
                         ):
-                            del st.session_state. collected_data[step['key_data']]
+                            del st.session_state.collected_data[step['key_data']]
                             st.rerun()
             
-            # ✅ CASO 2: Step corrente → Box blu animato
-            elif current_step. name == step['id']:
+            # ✅ CASO 2: Step corrente → Box blu animato (HTML/CSS)
+            elif current_step.name == step['id']:
                 st.markdown(f"""
                 <div style='
-                    background:  linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+                    background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
                     color: white;
-                    padding:  15px;
+                    padding: 15px;
                     border-radius: 10px;
                     text-align: center;
                     animation: pulse 2s infinite;
@@ -1851,7 +1873,7 @@ def render_dynamic_step_tracker():
                 </style>
                 """, unsafe_allow_html=True)
             
-            # ✅ CASO 3: Step futuro → Box grigio
+            # ✅ CASO 3: Step futuro → Box grigio (HTML/CSS)
             else:
                 st.markdown(f"""
                 <div style='
@@ -3069,61 +3091,65 @@ def render_main_application():
                     st.session_state.collected_data[step_name] = opt
                     validation_success = True
                 
-                # Clear survey e avanza
-                st.session_state. pending_survey = None
+                # Clear survey
+                st.session_state.pending_survey = None
                 
                 if validation_success:
-                    # 🔧 FIX BUG PULSANTI: Invia risposta all'orchestratore per sincronizzare FSM
-                    try:
-                        current_phase = PHASES[st.session_state.current_phase_idx]
-                        phase_id = current_phase["id"]
-                        path = st.session_state.get('triage_path', 'C')
-                        
-                        # Chiama orchestratore per generare prossima risposta
-                        # Usa import globale (non locale per evitare UnboundLocalError)
-                        res_gen = stream_ai_response(
-                            orchestrator,
-                            st.session_state.messages,
-                            path,
-                            phase_id,
-                            collected_data=st.session_state.collected_data,
-                            is_first_message=False
-                        )
-                        
-                        # Consuma generatore per ottenere risposta
-                        ai_response = ""
-                        final_obj = None
-                        for chunk in res_gen:
-                            if isinstance(chunk, dict):
-                                final_obj = chunk
-                                ai_response = chunk.get("testo", "")
-                            elif isinstance(chunk, str):
-                                ai_response += chunk
-                            elif hasattr(chunk, 'model_dump'):
-                                final_obj = chunk.model_dump()
-                                ai_response = final_obj.get("testo", "")
-                        
-                        # Salva risposta AI in cronologia
-                        if ai_response:
-                            st.session_state.messages.append({
-                                "role": "assistant",
-                                "content": ai_response
-                            })
-                            logger.info(f"✅ Risposta AI generata da pulsante: {len(ai_response)} caratteri")
-                        
-                        # Sincronizza metadati se presenti
-                        if final_obj and final_obj.get("metadata"):
-                            update_backend_metadata(final_obj["metadata"])
-                        
-                    except Exception as e:
-                        logger.error(f"❌ Errore chiamata orchestratore da pulsante: {e}")
-                        # Continua comunque con avanzamento step
+                    # 🔧 FIX V5.0: FLUSSO ATOMICO - Pressione -> Dati -> Advance -> AI -> Rerun
+                    # STEP 1: Avanza step PRIMA di chiamare AI (così l'AI sa lo step corrente)
+                    advance_success = advance_step()
                     
-                    advance_step()
-                    if st.session_state.current_phase_idx < len(PHASES) - 1:
-                        st.session_state.current_phase_idx += 1
-                
-                st.rerun()
+                    if advance_success:
+                        # STEP 2: Chiama AI con stato aggiornato (step già avanzato)
+                        try:
+                            current_phase = PHASES[st.session_state.current_phase_idx]
+                            phase_id = current_phase["id"]
+                            path = st.session_state.get('triage_path', 'C')
+                            
+                            # Chiama orchestratore per generare prossima risposta
+                            res_gen = stream_ai_response(
+                                orchestrator,
+                                st.session_state.messages,
+                                path,
+                                phase_id,
+                                collected_data=st.session_state.collected_data,
+                                is_first_message=False
+                            )
+                            
+                            # Consuma generatore per ottenere risposta
+                            ai_response = ""
+                            final_obj = None
+                            for chunk in res_gen:
+                                if isinstance(chunk, dict):
+                                    final_obj = chunk
+                                    ai_response = chunk.get("testo", "")
+                                elif isinstance(chunk, str):
+                                    ai_response += chunk
+                                elif hasattr(chunk, 'model_dump'):
+                                    final_obj = chunk.model_dump()
+                                    ai_response = final_obj.get("testo", "")
+                            
+                            # STEP 3: Salva risposta AI in cronologia
+                            if ai_response:
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": ai_response
+                                })
+                                logger.info(f"✅ Risposta AI generata da pulsante: {len(ai_response)} caratteri")
+                            
+                            # Sincronizza metadati se presenti
+                            if final_obj and final_obj.get("metadata"):
+                                update_backend_metadata(final_obj["metadata"])
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Errore chiamata orchestratore da pulsante: {e}")
+                            # Continua comunque - lo step è già avanzato
+                        
+                        # STEP 4: Rerun finale per mostrare risposta AI e aggiornare UI
+                        st.rerun()
+                    else:
+                        logger.warning("⚠️ Avanzamento step fallito - dati non completi")
+                        st.rerun()  # Rerun comunque per aggiornare UI
     
     # Gestione input personalizzato "Altro"
     if st.session_state.get("show_altro"):
