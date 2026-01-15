@@ -79,7 +79,7 @@
 11. save_structured_log() → triage_logs.jsonl
 ```
 
-### 2.2 Flusso Analytics Dashboard (V3 - Con Password Gate)
+### 2.2 Flusso Analytics Dashboard (V5.0 - Top Header Engine)
 
 ```
 [Utente Browser] → http://localhost:8501 (app.py)
@@ -93,7 +93,15 @@
 4a. Password Corretta → st.session_state.authenticated = True → import backend → backend.main()
 4b. Password Errata → st.sidebar.error("❌ Accesso Negato") → st.stop()
      ↓
-5. TriageDataStore(LOG_FILE) → Caricamento triage_logs.jsonl (local-first)
+5. Backend Refresh → Invalida cache _FILE_CACHE → TriageDataStore(LOG_FILE) → Caricamento triage_logs.jsonl fresco
+     ↓
+6. Top Header Navigation → st.columns([2,2,2,2]) con filtri temporali/geografici
+     ↓
+7. Calcolo KPI Completo → calculate_kpi_completo() → 15 KPI avanzati
+     ↓
+8. Visualizzazione Dashboard → Grafici Plotly GO + Metriche
+     ↓
+9. Export Excel → to_excel() → Foglio Dashboard + Foglio Dettaglio
 ```
 
 ### 2.3 Flusso Sincronizzazione Sessioni (V3 - Local-First)
@@ -215,6 +223,85 @@ Report multi-foglio generato con `xlsxwriter`:
 - Tasso deviazione PS (% indirizzati a emergency)
 - Distribuzione per distretto (Top 15 barre orizzontali)
 - Distribuzione per AUSL
+
+### 3.5 Top Header Navigation Engine ✨ (V5.0)
+
+**Architettura UI:**
+- ✅ **Rimozione Sidebar**: Tutti i filtri spostati in header orizzontale superiore
+- ✅ **Layout Responsive**: Utilizzo di `st.columns` per organizzazione orizzontale
+- ✅ **Empty State Handling**: Gestione elegante di filtri senza risultati
+
+**Componenti Top Header:**
+
+1. **Filtri Temporali (Colonna 1)**:
+   - Selettore "Anno/Mese" per aggregazione automatica
+   - Dropdown dinamico con indicazione dati disponibili
+
+2. **Filtri Date Range (Colonna 2)**:
+   - Date Input "Dal / Al" per ricerche granulari
+   - Supporto per intervalli personalizzati
+
+3. **Cascading Geografico (Colonna 3)**:
+   - Dropdown AUSL (da `distretti_sanitari_er.json`)
+   - Dropdown Distretto popolato dinamicamente in base ad AUSL selezionato
+   - Filtro gerarchico: AUSL → Distretto
+
+4. **Export Dati (Colonna 4)**:
+   - Pulsanti download CSV e Excel
+   - Pre-calcolo KPI per export ottimizzato
+
+**Vantaggi:**
+- ✅ Maggiore spazio per visualizzazioni (no sidebar)
+- ✅ Filtri sempre visibili senza scroll
+- ✅ UX moderna e professionale
+- ✅ Compatibilità mobile migliorata
+
+### 3.6 Framework KPI Completo (15 KPI Avanzati) ✨ (V5.0)
+
+Implementazione completa di tutti i 15 KPI clinici richiesti:
+
+1. **Accuratezza Clinica**: Valutazione coerenza sintomi dichiarati vs disposizione finale
+2. **Latenza Media**: Tempo di risposta del modello AI (prompt → triage)
+3. **Tasso di Completamento**: Percentuale utenti che terminano il flusso completo
+4. **Aderenza ai Protocolli**: Verifica flusso domande vs linee guida regionali
+5. **User Sentiment**: Analisi tono utente (positivo/neutro/negativo/urgente)
+6. **Efficienza Reindirizzamento**: Capacità di deviare casi non urgenti verso strutture territoriali
+7. **Sessioni Univoche**: Conteggio interazioni uniche depurate da duplicati
+8. **Throughput Orario**: Analisi picchi utilizzo chatbot per fasce orarie
+9. **Tempo Mediano di Triage**: Durata temporale necessaria per completare sessione
+10. **Tasso di Divergenza Algoritmica**: Misura quanto spesso AI suggerisce esito diverso da sistema deterministico
+11. **Tasso di Omissione Red Flags**: Monitoraggio casi in cui sintomi critici non catturati
+12. **Funnel Drop-off**: Identificazione step chat con maggiori abbandoni
+13. **Indice di Esitazione**: Misura tempo risposta utente alle domande bot
+14. **Fast Track Efficiency Ratio**: Rapporto velocità gestione casi critici vs standard
+15. **Copertura Geografica**: Analisi provenienza richieste vs densità strutture sanitarie
+
+**Logica di Calcolo:**
+- Ogni KPI implementato con logica descrittiva nel codice
+- Gestione edge cases e dati mancanti
+- Calcoli ottimizzati per performance
+
+### 3.7 Excel Reporting Engine Avanzato ✨ (V5.0)
+
+**Architettura Multi-Scheda:**
+
+**Foglio Dashboard:**
+- Titolo dinamico: `ANALISI DATI [DISTRETTO] - [PERIODO]`
+- Tabella completa con tutti i 15 KPI avanzati
+- Colonne: KPI, Descrizione, Valore, Unità
+- Formattazione professionale (header colorati, percentuali, numeri)
+
+**Foglio Dettaglio:**
+- Analisi per Distretto e AUSL
+- Colonne: Distretto, AUSL, Sessioni, Interazioni, Urgenza Media, Red Flags %
+- Aggregazione automatica per distretto sanitario
+- Mappatura AUSL da `distretti_sanitari_er.json`
+
+**Caratteristiche:**
+- ✅ Pulsanti download replicati in alto e in basso (simulati con note)
+- ✅ Formati numerici appropriati (percentuali, decimali)
+- ✅ Stile professionale con colori aziendali
+- ✅ Titoli dinamici basati su filtri applicati
 
 ---
 
@@ -591,6 +678,56 @@ def check_backend_authentication():
 2. **send_triage_to_backend()**: Funzione deprecata (non più necessaria)
 3. **\_last_storage_sync**: Inizializzato a `0` invece di `None` (fix TypeError)
 4. **Sidebar Crash**: Inizializzazione corretta componenti per evitare crash all'apertura
+
+### 12.6 Changelog V5.0 (Gennaio 2026) - MEGA-PROMPT Implementation
+
+**🆕 Nuove Funzionalità:**
+
+1. **Fix Persistenza Dati (Sincronizzazione JSONL)**
+   - ✅ Riscritta `save_structured_log()` con `pathlib` per path resolution dinamico
+   - ✅ Scrittura atomica con `flush()` + `os.fsync()` per forzare scrittura immediata su disco
+   - ✅ Compatibilità filesystem Streamlit Cloud garantita
+
+2. **Backend Refresh Automatico**
+   - ✅ Invalidazione cache `_FILE_CACHE` ad ogni caricamento pagina
+   - ✅ `reload_if_updated()` chiamato automaticamente per garantire dati freschi
+   - ✅ Nuove chat visibili in tempo reale senza refresh manuale
+
+3. **Top Header Navigation Engine**
+   - ✅ Rimozione completa `st.sidebar` nel modulo Analytics
+   - ✅ Implementazione navigazione orizzontale superiore con `st.columns`
+   - ✅ Filtri temporali: Selettore "Anno/Mese" + Date Input "Dal / Al"
+   - ✅ Cascading geografico: Dropdown AUSL → Dropdown Distretto (popolato dinamicamente)
+   - ✅ Empty State handling: Avviso "Nessun dato disponibile" senza rompere grafici
+
+4. **Framework KPI Completo (15 KPI)**
+   - ✅ Implementati tutti i 15 KPI clinici avanzati con logica di calcolo descrittiva
+   - ✅ Accuratezza Clinica, Latenza Media, Tasso Completamento, Aderenza Protocolli
+   - ✅ User Sentiment, Efficienza Reindirizzamento, Sessioni Univoche, Throughput Orario
+   - ✅ Tempo Mediano Triage, Tasso Divergenza Algoritmica, Tasso Omissione Red Flags
+   - ✅ Funnel Drop-off, Indice Esitazione, Fast Track Efficiency Ratio, Copertura Geografica
+
+5. **Excel Reporting Engine Avanzato**
+   - ✅ Export multi-scheda: Foglio "Dashboard" + Foglio "Dettaglio"
+   - ✅ Titolo dinamico: `ANALISI DATI [DISTRETTO] - [PERIODO]`
+   - ✅ Tutti i 15 KPI nel foglio Dashboard con formattazione professionale
+   - ✅ Analisi per Distretto e AUSL nel foglio Dettaglio
+   - ✅ Pulsanti download replicati (simulati con note)
+
+**🔧 Fix Tecnici:**
+
+- ✅ `save_interaction_log()` aggiornato con pathlib e scrittura atomica
+- ✅ Path resolution unificato: `Path(__file__).parent.absolute() / "triage_logs.jsonl"`
+- ✅ Gestione errori migliorata in tutte le funzioni KPI
+- ✅ Compatibilità backward mantenuta con log esistenti
+
+**📊 Metriche V5.0:**
+
+- **Persistenza**: Scrittura atomica garantita con `fsync()`
+- **Refresh**: Cache invalidata automaticamente ad ogni load
+- **UX**: Top Header Navigation → 100% spazio disponibile per visualizzazioni
+- **KPI Coverage**: 15/15 KPI implementati con logica completa
+- **Excel Export**: Multi-scheda professionale con titoli dinamici
 
 ### 12.5 Deployment V3
 

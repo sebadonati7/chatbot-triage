@@ -300,7 +300,9 @@ MODEL_CONFIG = {
 
 # Path log file: assoluto relativo alla root del progetto (compatibile con backend.py)
 # V4.0: Modernizzazione architetturale - path assoluto per garantire coerenza
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "triage_logs.jsonl")
+# V5.0: Usa pathlib per path resolution dinamico e robusto
+from pathlib import Path
+LOG_FILE = str(Path(__file__).parent.absolute() / "triage_logs.jsonl")
 
 PHASES = [
     {"id": "IDENTIFICATION", "name": "Identificazione", "icon": "👤"},
@@ -1581,15 +1583,19 @@ def save_interaction_log(user_input: str, bot_response: str):
             "metadata": metadata
         }
         
-        # Scrittura atomica thread-safe
+        # Scrittura atomica thread-safe con pathlib
+        from pathlib import Path
         import threading
         _interaction_lock = threading.Lock()
         
+        log_file_path = Path(LOG_FILE).absolute()
+        log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        
         with _interaction_lock:
-            with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            with open(str(log_file_path), 'a', encoding='utf-8') as f:
                 f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
-                f.flush()
-                os.fsync(f.fileno())
+                f.flush()  # Forza flush del buffer
+                os.fsync(f.fileno())  # Forza scrittura immediata su disco
         
         logger.debug(f"✅ Interaction log salvato: session={session_id}")
         
@@ -1737,21 +1743,26 @@ def save_structured_log():
         # FALLBACK FINALE: Scrittura diretta atomica (sempre come ultima risorsa)
         if not write_success:
             try:
+                # Path Resolution: Usa pathlib per path dinamico e robusto
+                from pathlib import Path
+                log_file_path = Path(LOG_FILE).absolute()
+                
                 # Assicura che la directory esista
-                os.makedirs(os.path.dirname(LOG_FILE) if os.path.dirname(LOG_FILE) else '.', exist_ok=True)
+                log_file_path.parent.mkdir(parents=True, exist_ok=True)
                 
                 # Aggiungi timestamp_end al momento scrittura (2026)
                 log_entry['timestamp_end'] = datetime.now().isoformat()
                 
-                # Scrittura diretta con lock manuale (thread-safe)
+                # Atomic Write: Scrittura diretta con lock manuale (thread-safe)
                 import threading
                 _direct_write_lock = threading.Lock()
                 
                 with _direct_write_lock:
-                    with open(LOG_FILE, 'a', encoding='utf-8') as f:
+                    # Apri in modalità append ('a'), scrivi JSON in una singola riga
+                    with open(str(log_file_path), 'a', encoding='utf-8') as f:
                         f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
-                        f.flush()
-                        os.fsync(f.fileno())
+                        f.flush()  # Forza flush del buffer
+                        os.fsync(f.fileno())  # Forza scrittura immediata su disco
                 
                 logger.info(f"✅ Log salvato con fallback diretto atomico: session={session_id}")
                 write_success = True

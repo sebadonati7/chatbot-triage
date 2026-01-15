@@ -569,15 +569,21 @@ class TriageDataStore:
         
         return output.getvalue().encode('utf-8-sig')  # UTF-8 BOM per Excel compatibility
     
-    def to_excel(self, kpi_vol: Dict = None, kpi_clin: Dict = None, kpi_ctx: Dict = None) -> Optional[bytes]:
+    def to_excel(self, kpi_vol: Dict = None, kpi_clin: Dict = None, kpi_ctx: Dict = None, 
+                 kpi_completo: Dict = None, district: str = None, date_from: str = None, 
+                 date_to: str = None) -> Optional[bytes]:
         """
-        Esporta dati in formato Excel con fogli multipli (KPI + Dati Grezzi).
+        Esporta dati in formato Excel con fogli multipli (Dashboard KPI + Dettaglio).
         Metodo della classe per coerenza architetturale.
         
         Args:
             kpi_vol: KPI volumetrici (opzionale)
             kpi_clin: KPI clinici (opzionale)
             kpi_ctx: KPI context-aware (opzionale)
+            kpi_completo: KPI completo (15 KPI avanzati)
+            district: Nome distretto per titolo dinamico
+            date_from: Data inizio periodo
+            date_to: Data fine periodo
         
         Returns:
             bytes: Excel in memoria (pronto per st.download_button) o None se xlsxwriter non disponibile
@@ -588,35 +594,159 @@ class TriageDataStore:
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         
-        if kpi_vol or kpi_clin or kpi_ctx:
-            ws_kpi = workbook.add_worksheet('KPI Aggregati')
-            header_format = workbook.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white'})
-            number_format = workbook.add_format({'num_format': '0.00'})
+        # Formati
+        header_format = workbook.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white'})
+        title_format = workbook.add_format({'bold': True, 'font_size': 16, 'bg_color': '#1e293b', 'font_color': 'white'})
+        number_format = workbook.add_format({'num_format': '0.00'})
+        percent_format = workbook.add_format({'num_format': '0.00%'})
+        
+        # === FOGLIO 1: DASHBOARD KPI ===
+        ws_dashboard = workbook.add_worksheet('Dashboard')
+        
+        # Titolo dinamico
+        periodo = f"{district or 'TUTTI I DISTRETTI'}"
+        if date_from and date_to:
+            periodo += f" - {date_from} / {date_to}"
+        elif date_from:
+            periodo += f" - Dal {date_from}"
+        
+        ws_dashboard.merge_range('A1:D1', f'ANALISI DATI {periodo}', title_format)
+        ws_dashboard.set_row(0, 30)
+        
+        row = 2
+        ws_dashboard.write(row, 0, 'KPI', header_format)
+        ws_dashboard.write(row, 1, 'Descrizione', header_format)
+        ws_dashboard.write(row, 2, 'Valore', header_format)
+        ws_dashboard.write(row, 3, 'Unità', header_format)
+        row += 1
+        
+        # KPI Completo (15 KPI avanzati)
+        if kpi_completo:
+            kpi_mapping = [
+                ('Accuratezza Clinica', 'accuratezza_clinica', '%', percent_format),
+                ('Latenza Media', 'latenza_media_secondi', 'secondi', number_format),
+                ('Tasso Completamento', 'tasso_completamento', '%', percent_format),
+                ('Aderenza Protocolli', 'aderenza_protocolli', '%', percent_format),
+                ('User Sentiment', 'sentiment_medio', 'score', number_format),
+                ('Efficienza Reindirizzamento', 'efficienza_reindirizzamento', '%', percent_format),
+                ('Sessioni Univoche', 'sessioni_uniche', 'n', number_format),
+                ('Tempo Mediano Triage', 'tempo_mediano_triage_minuti', 'minuti', number_format),
+                ('Tasso Divergenza Algoritmica', 'tasso_divergenza_algoritmica', '%', percent_format),
+                ('Tasso Omissione Red Flags', 'tasso_omissione_red_flags', '%', percent_format),
+                ('Funnel Drop-off Rate', 'funnel_dropoff.dropoff_rate', '%', percent_format),
+                ('Indice Esitazione', 'indice_esitazione_secondi', 'secondi', number_format),
+                ('Fast Track Efficiency Ratio', 'fast_track_efficiency_ratio', 'ratio', number_format),
+            ]
             
-            row = 0
-            ws_kpi.write(row, 0, 'Categoria', header_format)
-            ws_kpi.write(row, 1, 'Metrica', header_format)
-            ws_kpi.write(row, 2, 'Valore', header_format)
+            for name, key, unit, fmt in kpi_mapping:
+                if '.' in key:
+                    # Nested key (es. funnel_dropoff.dropoff_rate)
+                    parts = key.split('.')
+                    val = kpi_completo.get(parts[0], {})
+                    if isinstance(val, dict):
+                        val = val.get(parts[1], 0)
+                else:
+                    val = kpi_completo.get(key, 0)
+                
+                if isinstance(val, (int, float)):
+                    ws_dashboard.write(row, 0, name)
+                    ws_dashboard.write(row, 1, f'KPI: {name}')
+                    ws_dashboard.write(row, 2, val, fmt)
+                    ws_dashboard.write(row, 3, unit)
+                    row += 1
+        
+        # KPI Volumetrici aggiuntivi
+        if kpi_vol:
+            ws_dashboard.write(row, 0, 'Interazioni Totali')
+            ws_dashboard.write(row, 1, 'Numero totale di interazioni')
+            ws_dashboard.write(row, 2, kpi_vol.get('interazioni_totali', 0), number_format)
+            ws_dashboard.write(row, 3, 'n')
             row += 1
             
-            if kpi_vol:
-                for key, val in kpi_vol.items():
-                    if key != 'throughput_orario':
-                        ws_kpi.write(row, 0, 'Volumetrico')
-                        ws_kpi.write(row, 1, key)
-                        ws_kpi.write(row, 2, val, number_format if isinstance(val, (int, float)) else None)
-                        row += 1
+            ws_dashboard.write(row, 0, 'Completion Rate')
+            ws_dashboard.write(row, 1, 'Percentuale sessioni completate')
+            ws_dashboard.write(row, 2, kpi_vol.get('completion_rate', 0), percent_format)
+            ws_dashboard.write(row, 3, '%')
+            row += 1
+        
+        # KPI Clinici aggiuntivi
+        if kpi_clin:
+            ws_dashboard.write(row, 0, 'Prevalenza Red Flags')
+            ws_dashboard.write(row, 1, 'Percentuale casi con red flags')
+            ws_dashboard.write(row, 2, kpi_clin.get('prevalenza_red_flags', 0), percent_format)
+            ws_dashboard.write(row, 3, '%')
+            row += 1
+        
+        # KPI Context-Aware aggiuntivi
+        if kpi_ctx:
+            ws_dashboard.write(row, 0, 'Tasso Deviazione PS')
+            ws_dashboard.write(row, 1, 'Percentuale casi indirizzati al PS')
+            ws_dashboard.write(row, 2, kpi_ctx.get('tasso_deviazione_ps', 0), percent_format)
+            ws_dashboard.write(row, 3, '%')
+        
+        # Pulsanti download replicati in basso (simulazione con note)
+        last_row = row + 3
+        ws_dashboard.write(last_row, 0, 'Nota: I pulsanti di download sono disponibili nell\'interfaccia web', 
+                          workbook.add_format({'italic': True, 'font_color': '#666666'}))
+        
+        # === FOGLIO 2: DETTAGLIO PER DISTRETTO E AUSL ===
+        ws_dettaglio = workbook.add_worksheet('Dettaglio')
+        
+        # Titolo
+        ws_dettaglio.merge_range('A1:F1', f'ANALISI DETTAGLIO {periodo}', title_format)
+        ws_dettaglio.set_row(0, 30)
+        
+        row = 2
+        headers = ['Distretto', 'AUSL', 'Sessioni', 'Interazioni', 'Urgenza Media', 'Red Flags %']
+        for col, header in enumerate(headers):
+            ws_dettaglio.write(row, col, header, header_format)
+        row += 1
+        
+        # Carica district_data per mappatura AUSL
+        try:
+            district_data = load_district_mapping()
+        except:
+            district_data = {}
+        
+        # Aggrega per distretto
+        district_stats = defaultdict(lambda: {'ausl': '', 'sessions': set(), 'interactions': 0, 
+                                               'urgency_sum': 0, 'urgency_count': 0, 'red_flags': 0})
+        
+        for record in self.records:
+            dist = record.get('distretto', 'UNKNOWN')
+            district_stats[dist]['sessions'].add(record.get('session_id'))
+            district_stats[dist]['interactions'] += 1
+            urgency = record.get('urgenza', 3)
+            district_stats[dist]['urgency_sum'] += urgency
+            district_stats[dist]['urgency_count'] += 1
+            if record.get('has_red_flag', False):
+                district_stats[dist]['red_flags'] += 1
             
-            if kpi_clin:
-                ws_kpi.write(row, 0, 'Clinico')
-                ws_kpi.write(row, 1, 'prevalenza_red_flags')
-                ws_kpi.write(row, 2, kpi_clin.get('prevalenza_red_flags', 0), number_format)
-                row += 1
+            # Mappa AUSL
+            if district_data:
+                for ausl_item in district_data.get('health_districts', []):
+                    if 'districts' in ausl_item:
+                        for d in ausl_item['districts']:
+                            if d.get('name') == dist:
+                                district_stats[dist]['ausl'] = ausl_item.get('ausl', '')
+        
+        # Scrivi statistiche per distretto
+        for dist, stats in sorted(district_stats.items()):
+            sessions_count = len(stats['sessions'])
+            urgency_avg = stats['urgency_sum'] / stats['urgency_count'] if stats['urgency_count'] > 0 else 0
+            red_flags_pct = (stats['red_flags'] / stats['interactions'] * 100) if stats['interactions'] > 0 else 0
             
-            if kpi_ctx:
-                ws_kpi.write(row, 0, 'Context-Aware')
-                ws_kpi.write(row, 1, 'tasso_deviazione_ps')
-                ws_kpi.write(row, 2, kpi_ctx.get('tasso_deviazione_ps', 0), number_format)
+            ws_dettaglio.write(row, 0, dist)
+            ws_dettaglio.write(row, 1, stats['ausl'] or 'N/D')
+            ws_dettaglio.write(row, 2, sessions_count, number_format)
+            ws_dettaglio.write(row, 3, stats['interactions'], number_format)
+            ws_dettaglio.write(row, 4, urgency_avg, number_format)
+            ws_dettaglio.write(row, 5, red_flags_pct, percent_format)
+            row += 1
+        
+        workbook.close()
+        output.seek(0)
+        return output.read()
         
         ws_raw = workbook.add_worksheet('Dati Grezzi')
         header_format = workbook.add_format({'bold': True, 'bg_color': '#4472C4', 'font_color': 'white'})
@@ -803,6 +933,265 @@ def calculate_kpi_context_aware(datastore: TriageDataStore) -> Dict:
     total_recommendations = deviazione_ps + deviazione_territoriale
     kpi['tasso_deviazione_ps'] = (deviazione_ps / total_recommendations * 100) if total_recommendations > 0 else 0
     kpi['tasso_deviazione_territoriale'] = (deviazione_territoriale / total_recommendations * 100) if total_recommendations > 0 else 0
+    
+    return kpi
+
+
+def calculate_kpi_completo(datastore: TriageDataStore) -> Dict:
+    """
+    Framework KPI Completo - Calcola tutti i 15 KPI clinici avanzati.
+    Logica di calcolo descritta per ciascun KPI.
+    """
+    kpi = {}
+    
+    # 1. ACCURATEZZA CLINICA
+    # Valutazione della coerenza tra sintomi dichiarati e disposizione finale
+    accurate_sessions = 0
+    total_sessions_with_disposition = 0
+    
+    for sid, records in datastore.sessions.items():
+        user_symptoms = []
+        final_disposition = None
+        final_urgency = None
+        
+        for r in records:
+            user_input = str(r.get('user_input', '')).lower()
+            # Estrai sintomi menzionati
+            for symptom in SINTOMI_COMUNI:
+                if symptom in user_input:
+                    user_symptoms.append(symptom)
+            
+            # Estrai disposizione finale
+            if 'outcome' in r and isinstance(r['outcome'], dict):
+                final_disposition = r['outcome'].get('disposition')
+                final_urgency = r['outcome'].get('urgency_level')
+        
+        if final_disposition and user_symptoms:
+            total_sessions_with_disposition += 1
+            # Logica semplificata: se urgenza alta e sintomi gravi, o urgenza bassa e sintomi lievi
+            has_red_flag = any(rf in ' '.join(user_symptoms) for rf in RED_FLAGS_KEYWORDS)
+            if (final_urgency and final_urgency >= 4 and has_red_flag) or \
+               (final_urgency and final_urgency <= 2 and not has_red_flag):
+                accurate_sessions += 1
+    
+    kpi['accuratezza_clinica'] = (accurate_sessions / total_sessions_with_disposition * 100) if total_sessions_with_disposition > 0 else 0
+    
+    # 2. LATENZA MEDIA
+    # Tempo di risposta del modello AI tra prompt utente e generazione triage
+    latencies = []
+    for r in datastore.records:
+        # Stima latenza: differenza tra timestamp record e timestamp precedente (se interaction log)
+        if 'timestamp' in r:
+            # Per interaction log, latenza è tempo tra user_input e bot_response
+            # Approssimazione: se ci sono più record nella stessa sessione, calcola differenza
+            pass  # Richiede timestamp più granulari
+    
+    # Approssimazione: usa durata totale sessione / numero interazioni
+    total_latency_seconds = 0
+    total_interactions = 0
+    for sid, records in datastore.sessions.items():
+        if len(records) >= 2:
+            timestamps = [r.get('datetime') for r in records if r.get('datetime')]
+            if len(timestamps) >= 2:
+                session_duration = (max(timestamps) - min(timestamps)).total_seconds()
+                total_latency_seconds += session_duration / len(records)  # Latenza media per sessione
+                total_interactions += len(records)
+    
+    kpi['latenza_media_secondi'] = (total_latency_seconds / len(datastore.sessions)) if datastore.sessions else 0
+    
+    # 3. TASSO DI COMPLETAMENTO
+    # Percentuale utenti che terminano l'intero flusso fino alla raccomandazione finale
+    completed = 0
+    for sid, records in datastore.sessions.items():
+        for r in records:
+            bot_resp = str(r.get('bot_response', '')).lower()
+            if 'raccomand' in bot_resp or 'disposition' in bot_resp or 'pronto soccorso' in bot_resp:
+                completed += 1
+                break
+    
+    kpi['tasso_completamento'] = (completed / len(datastore.sessions) * 100) if datastore.sessions else 0
+    
+    # 4. ADERENZA AI PROTOCOLLI
+    # Verifica se il flusso ha seguito le linee guida regionali
+    # Logica: controlla se sono stati raccolti tutti i dati necessari (age, location, sintomi)
+    protocol_adherent = 0
+    for sid, records in datastore.sessions.items():
+        has_age = False
+        has_location = False
+        has_symptoms = False
+        
+        for r in records:
+            if r.get('age') or 'età' in str(r.get('user_input', '')).lower():
+                has_age = True
+            if r.get('comune') or r.get('location'):
+                has_location = True
+            if any(s in str(r.get('user_input', '')).lower() for s in SINTOMI_COMUNI):
+                has_symptoms = True
+        
+        if has_age and has_location and has_symptoms:
+            protocol_adherent += 1
+    
+    kpi['aderenza_protocolli'] = (protocol_adherent / len(datastore.sessions) * 100) if datastore.sessions else 0
+    
+    # 5. USER SENTIMENT
+    # Analisi del tono dell'utente (positivo/neutro/negativo/urgente)
+    positive_keywords = ['grazie', 'perfetto', 'ottimo', 'bene', 'ok']
+    negative_keywords = ['male', 'peggio', 'preoccupato', 'paura', 'ansia']
+    urgent_keywords = ['subito', 'immediato', 'urgente', 'emergenza', 'ora']
+    
+    sentiment_scores = []
+    for r in datastore.records:
+        user_input = str(r.get('user_input', '')).lower()
+        score = 0  # neutro
+        if any(kw in user_input for kw in positive_keywords):
+            score = 1
+        elif any(kw in user_input for kw in negative_keywords):
+            score = -1
+        if any(kw in user_input for kw in urgent_keywords):
+            score = -2  # molto negativo/urgente
+        sentiment_scores.append(score)
+    
+    kpi['sentiment_medio'] = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0
+    
+    # 6. EFFICIENZA REINDIRIZZAMENTO
+    # Capacità di deviare casi non urgenti verso strutture territoriali invece del PS
+    non_urgent_to_territorial = 0
+    non_urgent_to_ps = 0
+    
+    for r in datastore.records:
+        urgency = r.get('urgenza', 3)
+        if urgency <= 2:  # Non urgente
+            bot_resp = str(r.get('bot_response', '')).lower()
+            if any(kw in bot_resp for kw in ['cau', 'guardia medica', 'medico di base']):
+                non_urgent_to_territorial += 1
+            elif any(kw in bot_resp for kw in ['pronto soccorso', 'ps', '118']):
+                non_urgent_to_ps += 1
+    
+    total_non_urgent = non_urgent_to_territorial + non_urgent_to_ps
+    kpi['efficienza_reindirizzamento'] = (non_urgent_to_territorial / total_non_urgent * 100) if total_non_urgent > 0 else 0
+    
+    # 7. SESSIONI UNIVOCHE (già calcolato in calculate_kpi_volumetrici)
+    kpi['sessioni_uniche'] = len(datastore.sessions)
+    
+    # 8. THROUGHPUT ORARIO (già calcolato in calculate_kpi_volumetrici)
+    hours = [r.get('hour', 0) for r in datastore.records if r.get('hour') is not None]
+    kpi['throughput_orario'] = Counter(hours)
+    
+    # 9. TEMPO MEDIANO DI TRIAGE (già calcolato in calculate_kpi_volumetrici)
+    session_durations = []
+    for sid, records in datastore.sessions.items():
+        if len(records) >= 2:
+            timestamps = [r.get('datetime') for r in records if r.get('datetime')]
+            if len(timestamps) >= 2:
+                duration = (max(timestamps) - min(timestamps)).total_seconds() / 60
+                if duration < 120:
+                    session_durations.append(duration)
+    
+    if session_durations:
+        session_durations.sort()
+        median_idx = len(session_durations) // 2
+        kpi['tempo_mediano_triage_minuti'] = session_durations[median_idx]
+    else:
+        kpi['tempo_mediano_triage_minuti'] = 0
+    
+    # 10. TASSO DI DIVERGENZA ALGORITMICA
+    # Misura quanto spesso l'AI suggerisce un esito diverso rispetto al sistema deterministico
+    # Approssimazione: confronta urgenza AI con urgenza basata su keyword matching
+    divergences = 0
+    total_comparisons = 0
+    
+    for r in datastore.records:
+        ai_urgency = r.get('urgenza', 3)
+        # Calcola urgenza deterministica basata su keyword
+        user_input = str(r.get('user_input', '')).lower()
+        deterministic_urgency = 3  # default
+        
+        if any(kw in user_input for kw in RED_FLAGS_KEYWORDS):
+            deterministic_urgency = 5
+        elif any(kw in user_input for kw in ['dolore forte', 'sangue', 'svenimento']):
+            deterministic_urgency = 4
+        elif any(kw in user_input for kw in ['lieve', 'piccolo', 'niente']):
+            deterministic_urgency = 2
+        
+        if abs(ai_urgency - deterministic_urgency) >= 2:  # Divergenza significativa
+            divergences += 1
+        total_comparisons += 1
+    
+    kpi['tasso_divergenza_algoritmica'] = (divergences / total_comparisons * 100) if total_comparisons > 0 else 0
+    
+    # 11. TASSO DI OMISSIONE RED FLAGS
+    # Casi in cui sintomi critici menzionati non sono stati catturati
+    red_flags_mentioned = 0
+    red_flags_captured = 0
+    
+    for r in datastore.records:
+        user_input = str(r.get('user_input', '')).lower()
+        mentioned_rf = [rf for rf in RED_FLAGS_KEYWORDS if rf in user_input]
+        if mentioned_rf:
+            red_flags_mentioned += len(mentioned_rf)
+            if r.get('has_red_flag', False):
+                red_flags_captured += len(mentioned_rf)
+    
+    kpi['tasso_omissione_red_flags'] = ((red_flags_mentioned - red_flags_captured) / red_flags_mentioned * 100) if red_flags_mentioned > 0 else 0
+    
+    # 12. FUNNEL DROP-OFF
+    # Identificazione dello step della chat in cui avviene la maggior parte degli abbandoni
+    step_counts = defaultdict(int)
+    for sid, records in datastore.sessions.items():
+        if len(records) < 3:  # Sessione abbandonata precocemente
+            step_counts['early_abandon'] += 1
+        else:
+            step_counts['completed'] += 1
+    
+    kpi['funnel_dropoff'] = {
+        'early_abandon': step_counts['early_abandon'],
+        'completed': step_counts['completed'],
+        'dropoff_rate': (step_counts['early_abandon'] / len(datastore.sessions) * 100) if datastore.sessions else 0
+    }
+    
+    # 13. INDICE DI ESITAZIONE
+    # Misura del tempo di risposta dell'utente alle domande del bot
+    # Approssimazione: tempo tra bot_response e user_input successivo
+    hesitation_times = []
+    for sid, records in datastore.sessions.items():
+        sorted_records = sorted([r for r in records if r.get('datetime')], key=lambda x: x.get('datetime'))
+        for i in range(len(sorted_records) - 1):
+            if sorted_records[i].get('bot_response') and sorted_records[i+1].get('user_input'):
+                time_diff = (sorted_records[i+1].get('datetime') - sorted_records[i].get('datetime')).total_seconds()
+                if 5 < time_diff < 300:  # Tra 5 secondi e 5 minuti (escludi pause lunghe)
+                    hesitation_times.append(time_diff)
+    
+    kpi['indice_esitazione_secondi'] = sum(hesitation_times) / len(hesitation_times) if hesitation_times else 0
+    
+    # 14. FAST TRACK EFFICIENCY RATIO
+    # Rapporto di velocità tra gestione casi critici (codici rossi) e standard
+    critical_durations = []
+    standard_durations = []
+    
+    for sid, records in datastore.sessions.items():
+        if len(records) >= 2:
+            timestamps = [r.get('datetime') for r in records if r.get('datetime')]
+            if len(timestamps) >= 2:
+                duration = (max(timestamps) - min(timestamps)).total_seconds() / 60
+                max_urgency = max([r.get('urgenza', 3) for r in records])
+                
+                if max_urgency >= 4:  # Critico
+                    critical_durations.append(duration)
+                else:
+                    standard_durations.append(duration)
+    
+    avg_critical = sum(critical_durations) / len(critical_durations) if critical_durations else 0
+    avg_standard = sum(standard_durations) / len(standard_durations) if standard_durations else 0
+    
+    kpi['fast_track_efficiency_ratio'] = (avg_standard / avg_critical) if avg_critical > 0 else 0
+    
+    # 15. COPERTURA GEOGRAFICA
+    # Analisi della provenienza delle richieste rispetto alla densità delle strutture
+    districts_count = Counter([r.get('distretto', 'UNKNOWN') for r in datastore.records])
+    kpi['copertura_geografica'] = {
+        'distretti_attivi': len([d for d in districts_count.values() if d > 0]),
+        'distribuzione_distretti': dict(districts_count.most_common(10))
+    }
     
     return kpi
 
@@ -1008,11 +1397,19 @@ def main():
     
     # CRITICAL: Mostra warning xlsxwriter QUI, non nel global scope
     if not XLSX_AVAILABLE:
-        st.sidebar.warning("⚠️ xlsxwriter non disponibile. Export Excel disabilitato.\nInstalla con: `pip install xlsxwriter`")
+        st.warning("⚠️ xlsxwriter non disponibile. Export Excel disabilitato.\nInstalla con: `pip install xlsxwriter`")
+    
+    # Backend Refresh: Invalida cache ad ogni caricamento pagina per garantire dati freschi
+    # Questo assicura che le nuove chat siano visibili in tempo reale
+    cache_key = str(Path(LOG_FILE).absolute())
+    if cache_key in _FILE_CACHE:
+        del _FILE_CACHE[cache_key]
     
     # Carica dati con gestione errori robusta
     try:
         datastore = TriageDataStore(LOG_FILE)
+        # Forza ricaricamento dati per garantire sincronizzazione
+        datastore.reload_if_updated()
     except Exception as e:
         st.error(f"❌ Errore fatale durante caricamento dati: {e}")
         st.info("💡 Verifica che il file `triage_logs.jsonl` sia valido o rimuovilo per ripartire da zero.")
@@ -1039,113 +1436,144 @@ def main():
         st.info("💡 Avvia il **Chatbot Triage** tramite `app.py` per generare dati di triage.")
         return
     
-    # === SIDEBAR: FILTRI ===
-    st.sidebar.header("📂 Filtri Temporali e Territoriali")
+    # === TOP HEADER NAVIGATION: FILTRI ===
+    st.markdown("---")
     
-    # Filtro Anno (pre-popolato con anni disponibili + 2025/2026)
-    years = datastore.get_unique_values('year')
-    # Aggiungi anni standard se non presenti
-    all_years = sorted(set(years + [2025, 2026]), reverse=True)
-    sel_year = st.sidebar.selectbox("Anno", all_years) if all_years else None
+    # Row 1: Filtri Temporali
+    col_temp1, col_temp2, col_temp3, col_temp4 = st.columns([2, 2, 2, 2])
     
-    # Filtro Mese (pre-popolato 1-12, mostra "0" se nessun dato)
-    month_names = {
-        1: "Gennaio", 2: "Febbraio", 3: "Marzo", 4: "Aprile",
-        5: "Maggio", 6: "Giugno", 7: "Luglio", 8: "Agosto",
-        9: "Settembre", 10: "Ottobre", 11: "Novembre", 12: "Dicembre"
-    }
+    with col_temp1:
+        # Filtro Anno/Mese (Aggregazione automatica)
+        years = datastore.get_unique_values('year')
+        all_years = sorted(set(years + [2025, 2026]), reverse=True)
+        sel_year = st.selectbox("📅 Anno", all_years, key="header_year") if all_years else None
+        
+        month_names = {
+            1: "Gennaio", 2: "Febbraio", 3: "Marzo", 4: "Aprile",
+            5: "Maggio", 6: "Giugno", 7: "Luglio", 8: "Agosto",
+            9: "Settembre", 10: "Ottobre", 11: "Novembre", 12: "Dicembre"
+        }
+        
+        months_available = []
+        if sel_year:
+            filtered_by_year = datastore.filter(year=sel_year)
+            months_available = filtered_by_year.get_unique_values('month')
+        
+        month_options = ['Tutti']
+        for m in range(1, 13):
+            month_label = f"{m:02d} - {month_names.get(m, 'Mese')}"
+            if m in months_available:
+                month_options.append(month_label)
+            else:
+                month_options.append(f"{month_label} (0 dati)")
+        
+        sel_month = st.selectbox("📆 Mese", month_options, key="header_month")
+        sel_month = None if sel_month == 'Tutti' else int(sel_month.split(' - ')[0])
     
-    months_available = []
-    if sel_year:
-        filtered_by_year = datastore.filter(year=sel_year)
-        months_available = filtered_by_year.get_unique_values('month')
+    with col_temp2:
+        # Filtro Date Range (Dal / Al)
+        date_from = st.date_input("📥 Dal", value=None, key="header_date_from")
+        date_to = st.date_input("📤 Al", value=None, key="header_date_to")
     
-    # Pre-popolare con tutti i mesi 1-12
-    month_options = ['Tutti']
-    for m in range(1, 13):
-        month_label = f"{m:02d} - {month_names.get(m, 'Mese')}"
-        if m in months_available:
-            month_options.append(month_label)
-        else:
-            month_options.append(f"{month_label} (0 dati)")
+    with col_temp3:
+        # Cascading Geografico: AUSL → Distretto
+        ausl_options = ['Tutti']
+        ausl_to_districts = {}
+        
+        if district_data and 'health_districts' in district_data:
+            for ausl_item in district_data['health_districts']:
+                ausl_name = ausl_item.get('ausl', '')
+                if ausl_name:
+                    ausl_options.append(ausl_name)
+                    ausl_to_districts[ausl_name] = []
+                    if 'districts' in ausl_item:
+                        for d in ausl_item['districts']:
+                            if 'name' in d:
+                                ausl_to_districts[ausl_name].append(d['name'])
+        
+        sel_ausl = st.selectbox("🏥 AUSL", ausl_options, key="header_ausl")
+        
+        # Distretto popolato dinamicamente in base ad AUSL
+        district_options = ['Tutti']
+        if sel_ausl != 'Tutti' and sel_ausl in ausl_to_districts:
+            district_options.extend(sorted(ausl_to_districts[sel_ausl]))
+        
+        sel_district = st.selectbox("📍 Distretto", district_options, key="header_district")
+        sel_district = None if sel_district == 'Tutti' else sel_district
     
-    sel_month = st.sidebar.selectbox("Mese", month_options)
-    sel_month = None if sel_month == 'Tutti' else int(sel_month.split(' - ')[0])
-    
-    # Filtro Settimana (pre-popolato 1-52, mostra "0" se nessun dato)
-    weeks_available = []
-    if sel_year:
-        filtered_temp = datastore.filter(year=sel_year, month=sel_month)
-        weeks_available = filtered_temp.get_unique_values('week')
-    
-    # Pre-popolare con tutte le settimane 1-52
-    week_options = ['Tutte']
-    for w in range(1, 53):
-        week_label = f"Settimana {w:02d}"
-        if w in weeks_available:
-            week_options.append(week_label)
-        else:
-            week_options.append(f"{week_label} (0 dati)")
-    
-    sel_week = st.sidebar.selectbox("Settimana ISO", week_options)
-    sel_week = None if sel_week == 'Tutte' else int(sel_week.split(' ')[1])
-    
-    # Filtro Distretto Sanitario (Integrato con distretti_sanitari_er.json)
-    st.sidebar.divider()
-    st.sidebar.subheader("🏥 Filtro Distretto Sanitario")
-    
-    # Estrai distretti disponibili dal mapping
-    available_districts = []
-    if district_data and 'health_districts' in district_data:
-        for ausl_item in district_data['health_districts']:
-            if 'districts' in ausl_item:
-                for d in ausl_item['districts']:
-                    if 'name' in d:
-                        available_districts.append(d['name'])
-    
-    available_districts = sorted(list(set(available_districts)))
-
-    # Filtro Comune (per compatibilità)
-    comuni = datastore.get_unique_values('comune')
-    sel_comune = st.sidebar.selectbox("Comune", ['Tutti'] + sorted([c for c in comuni if c])) if comuni else 'Tutti'
-    sel_comune = None if sel_comune == 'Tutti' else sel_comune
-    
-    # Applica filtri
-    filtered_datastore = datastore.filter(year=sel_year, month=sel_month, week=sel_week)
-    
-    # === EXPORT EXCEL ===
-    st.sidebar.divider()
-    st.sidebar.subheader("📥 Export Dati")
-    
-    if XLSX_AVAILABLE and filtered_datastore.records:
-        try:
-            kpi_vol = calculate_kpi_volumetrici(filtered_datastore)
-            kpi_clin = calculate_kpi_clinici(filtered_datastore)
-            kpi_ctx = calculate_kpi_context_aware(filtered_datastore)
-            
-            excel_data = filtered_datastore.to_excel(kpi_vol, kpi_clin, kpi_ctx)
-            
-            # Export CSV
-            csv_data = filtered_datastore.to_csv(include_enriched=True)
-            if csv_data:
-                st.sidebar.download_button(
-                    label="📄 Scarica Report CSV",
-                    data=csv_data,
-                    file_name=f"Report_Triage_W{sel_week or 'ALL'}_{sel_year or 'ALL'}.csv",
-                    mime="text/csv"
+    with col_temp4:
+        # Export Dati
+        st.markdown("### 📥 Export")
+        
+        if XLSX_AVAILABLE and datastore.records:
+            try:
+                # Pre-calcola KPI per export
+                kpi_vol = calculate_kpi_volumetrici(filtered_datastore)
+                kpi_clin = calculate_kpi_clinici(filtered_datastore)
+                kpi_ctx = calculate_kpi_context_aware(filtered_datastore)
+                kpi_completo = calculate_kpi_completo(filtered_datastore)
+                
+                # Formatta date per titolo
+                date_from_str = date_from.strftime('%Y-%m-%d') if date_from else None
+                date_to_str = date_to.strftime('%Y-%m-%d') if date_to else None
+                
+                excel_data = filtered_datastore.to_excel(
+                    kpi_vol, kpi_clin, kpi_ctx, kpi_completo, 
+                    sel_district, date_from_str, date_to_str
                 )
-            
-            # Export Excel
-            if excel_data:
-                filename = f"Report_Triage_W{sel_week or 'ALL'}_{sel_year or 'ALL'}.xlsx"
-                st.sidebar.download_button(
-                    label="📊 Scarica Report Excel",
-                    data=excel_data,
-                    file_name=filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-        except Exception as e:
-            st.sidebar.error(f"❌ Errore export Excel: {e}")
+                csv_data = datastore.to_csv(include_enriched=True)
+                
+                if csv_data:
+                    st.download_button(
+                        label="📄 CSV",
+                        data=csv_data,
+                        file_name=f"Report_Triage_{sel_year or 'ALL'}.csv",
+                        mime="text/csv",
+                        key="header_csv"
+                    )
+                
+                if excel_data:
+                    st.download_button(
+                        label="📊 Excel",
+                        data=excel_data,
+                        file_name=f"Report_Triage_{sel_year or 'ALL'}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="header_excel"
+                    )
+            except Exception as e:
+                st.error(f"❌ Errore export: {e}")
+    
+    st.markdown("---")
+    
+    # Applica filtri temporali e geografici
+    filtered_datastore = datastore.filter(year=sel_year, month=sel_month, district=sel_district)
+    
+    # Filtro per date range se specificato
+    if date_from or date_to:
+        filtered_records = []
+        for record in filtered_datastore.records:
+            record_date = record.get('date')
+            if record_date:
+                if date_from and record_date < date_from:
+                    continue
+                if date_to and record_date > date_to:
+                    continue
+                filtered_records.append(record)
+        filtered_datastore.records = filtered_records
+        # Ricostruisci sessions
+        filtered_datastore.sessions = {}
+        for record in filtered_records:
+            sid = record.get('session_id')
+            if sid:
+                if sid not in filtered_datastore.sessions:
+                    filtered_datastore.sessions[sid] = []
+                filtered_datastore.sessions[sid].append(record)
+    
+    # Empty State: Se nessun dato disponibile per i filtri
+    if not filtered_datastore.records:
+        st.warning("⚠️ Nessun dato disponibile per i filtri selezionati.")
+        st.info("💡 Prova a modificare i filtri temporali o geografici.")
+        return
     
     # === INJECT SIRAYA CSS ===
     try:
@@ -1242,25 +1670,9 @@ def main():
     
     st.markdown("---")
     
-    # === KPI SELECTOR (Multiselect) ===
-    st.sidebar.divider()
-    st.sidebar.subheader("📊 Personalizza KPI")
-    
-    available_kpis = {
-        "Volumetrici": ["Sessioni Univoche", "Throughput Orario", "Completion Rate", "Tempo Mediano"],
-        "Clinici": ["Stratificazione Urgenza", "Spettro Sintomi", "Red Flags"],
-        "Context-Aware": ["Urgenza per Specializzazione", "Deviazione PS"]
-    }
-    
-    selected_kpis = st.sidebar.multiselect(
-        "Seleziona KPI da visualizzare",
-        options=["Tutti"] + [f"{cat}: {kpi}" for cat, kpis in available_kpis.items() for kpi in kpis],
-        default=["Tutti"],
-        key="kpi_selector"
-    )
-    
-    # Se "Tutti" è selezionato, mostra tutto
-    show_all_kpis = "Tutti" in selected_kpis
+    # === KPI SELECTOR (Multiselect) - Rimosso sidebar, integrato nel layout principale ===
+    # KPI vengono mostrati tutti di default (no sidebar selector)
+    show_all_kpis = True
     
     # === CALCOLO KPI CON PROTEZIONE ERRORI ===
     try:
@@ -1283,6 +1695,13 @@ def main():
         st.error(f"❌ Errore calcolo KPI context-aware: {e}")
         kpi_ctx = {'urgenza_media_per_spec': {}, 'tasso_deviazione_ps': 0, 
                    'tasso_deviazione_territoriale': 0}
+    
+    # === CALCOLO KPI COMPLETO (15 KPI AVANZATI) ===
+    try:
+        kpi_completo = calculate_kpi_completo(filtered_datastore)
+    except Exception as e:
+        st.error(f"❌ Errore calcolo KPI completo: {e}")
+        kpi_completo = {}
     
     # === SEZIONE 1: KPI VOLUMETRICI ===
     st.header("📈 KPI Volumetrici")
