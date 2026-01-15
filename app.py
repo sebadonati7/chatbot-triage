@@ -18,6 +18,28 @@ import os
 import sys
 from pathlib import Path
 
+# ============================================================================
+# CENTRALIZZAZIONE PERSISTENZA LOG (V3.2)
+# ============================================================================
+# Definisce il path assoluto di triage_logs.jsonl e lo gestisce centralmente
+# per garantire che Streamlit Cloud salvi correttamente le conversazioni
+
+# Path assoluto del file log (compatibile con Streamlit Cloud)
+LOG_FILE_PATH = Path(__file__).parent.absolute() / "triage_logs.jsonl"
+
+# Inizializza il file log se non esiste
+if not LOG_FILE_PATH.exists():
+    try:
+        LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(LOG_FILE_PATH, 'w', encoding='utf-8') as f:
+            pass  # Crea file vuoto
+    except Exception as e:
+        print(f"⚠️ Errore creazione file log: {e}")
+
+# Passa il path ai moduli tramite session_state
+if "log_file_path" not in st.session_state:
+    st.session_state.log_file_path = str(LOG_FILE_PATH)
+
 # Inietta CSS SIRAYA personalizzato
 try:
     from ui_components import inject_siraya_css
@@ -145,9 +167,10 @@ def main():
                 
                 st.session_state.frontend_loaded = True
             
-            # Import e esecuzione frontend
+            # Import e esecuzione frontend con path log centralizzato
             import frontend
-            frontend.main()
+            # Passa il path del log al frontend
+            frontend.main(log_file_path=st.session_state.log_file_path)
             
         except Exception as e:
             st.error(f"❌ Errore caricamento Chatbot Triage: {e}")
@@ -172,9 +195,10 @@ def main():
             if "frontend_loaded" in st.session_state:
                 del st.session_state.frontend_loaded
             
-            # Import e esecuzione backend
+            # Import e esecuzione backend con path log centralizzato
             import backend
-            backend.main()
+            # Passa il path del log al backend
+            backend.main(log_file_path=st.session_state.log_file_path)
             
         except Exception as e:
             st.error(f"❌ Errore caricamento Analytics Dashboard: {e}")

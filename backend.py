@@ -38,11 +38,11 @@ except ImportError:
 
 # === COSTANTI ===
 # V5.0: Path log unificato - identico a frontend.py per garantire coerenza
+# V3.2: Path centralizzato da app.py per garantire sincronizzazione Streamlit Cloud
 # Cloud-ready: Usa env var per path log persistente, ma default identico a frontend
-# Entrambi i file (frontend.py e backend.py) usano os.path.dirname(os.path.abspath(__file__))
-# quindi puntano alla stessa directory root del progetto
 LOG_DIR = os.environ.get("TRIAGE_LOGS_DIR", os.path.dirname(os.path.abspath(__file__)))
 os.makedirs(LOG_DIR, exist_ok=True)  # Crea directory se non esiste
+# Default path (usato se non passato da app.py)
 LOG_FILE = os.path.join(LOG_DIR, "triage_logs.jsonl")
 DISTRICTS_FILE = "distretti_sanitari_er.json"
 def load_json_file(filepath: str) -> Dict:
@@ -590,6 +590,31 @@ class TriageDataStore:
         """
         if not XLSX_AVAILABLE:
             return None
+        
+        # Gestione caso "No Data" - verifica se ci sono record
+        if not self.records:
+            # Crea Excel con messaggio elegante "No Data"
+            output = io.BytesIO()
+            workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+            ws_dashboard = workbook.add_worksheet('Dashboard')
+            
+            title_format = workbook.add_format({'bold': True, 'font_size': 16, 'bg_color': '#1e293b', 'font_color': 'white'})
+            info_format = workbook.add_format({'italic': True, 'font_size': 12, 'font_color': '#666666'})
+            
+            periodo = f"{district or 'TUTTI I DISTRETTI'}"
+            if date_from and date_to:
+                periodo += f" - {date_from} / {date_to}"
+            elif date_from:
+                periodo += f" - Dal {date_from}"
+            
+            ws_dashboard.merge_range('A1:D1', f'ANALISI DATI {periodo}', title_format)
+            ws_dashboard.set_row(0, 30)
+            ws_dashboard.write(2, 0, '⚠️ Nessun dato disponibile per i filtri selezionati.', info_format)
+            ws_dashboard.write(3, 0, 'Modifica i filtri temporali o geografici per visualizzare i dati.', info_format)
+            
+            workbook.close()
+            output.seek(0)
+            return output.read()
         
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
@@ -1392,8 +1417,17 @@ def render_sintomi_table(kpi_clin: Dict):
         height=400
     )
 # === MAIN APPLICATION ===
-def main():
-    """Entry point principale con gestione errori robusta."""
+def main(log_file_path: str = None):
+    """
+    Entry point principale con gestione errori robusta.
+    
+    Args:
+        log_file_path: Path del file log centralizzato da app.py (opzionale)
+    """
+    # Usa il path centralizzato se fornito, altrimenti usa il default
+    global LOG_FILE
+    if log_file_path:
+        LOG_FILE = log_file_path
     
     # CRITICAL: Mostra warning xlsxwriter QUI, non nel global scope
     if not XLSX_AVAILABLE:
@@ -1415,6 +1449,10 @@ def main():
         st.info("💡 Verifica che il file `triage_logs.jsonl` sia valido o rimuovilo per ripartire da zero.")
         return
     
+    # FIX BUG SCOPE: Inizializza filtered_datastore immediatamente dopo datastore
+    # Questo garantisce che la variabile esista sempre, anche se i filtri falliscono
+    filtered_datastore = datastore
+    
     try:
         district_data = load_district_mapping()
     except Exception as e:
@@ -1435,6 +1473,8 @@ def main():
         st.warning("⚠️ Nessun dato disponibile. Inizia una chat per popolare i log.")
         st.info("💡 Avvia il **Chatbot Triage** tramite `app.py` per generare dati di triage.")
         return
+    
+    # FIX BUG SCOPE: filtered_datastore già inizializzato sopra, ma aggiorniamo qui se necessario
     
     # === TOP HEADER NAVIGATION: FILTRI ===
     st.markdown("---")
@@ -1545,7 +1585,7 @@ def main():
     
     st.markdown("---")
     
-    # Applica filtri temporali e geografici
+    # Applica filtri temporali e geografici (filtered_datastore già inizializzato sopra)
     filtered_datastore = datastore.filter(year=sel_year, month=sel_month, district=sel_district)
     
     # Filtro per date range se specificato

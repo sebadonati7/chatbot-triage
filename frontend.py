@@ -301,7 +301,9 @@ MODEL_CONFIG = {
 # Path log file: assoluto relativo alla root del progetto (compatibile con backend.py)
 # V4.0: Modernizzazione architetturale - path assoluto per garantire coerenza
 # V5.0: Usa pathlib per path resolution dinamico e robusto
+# V3.2: Path centralizzato da app.py per garantire sincronizzazione Streamlit Cloud
 from pathlib import Path
+# Default path (usato se non passato da app.py)
 LOG_FILE = str(Path(__file__).parent.absolute() / "triage_logs.jsonl")
 
 PHASES = [
@@ -1068,10 +1070,36 @@ def render_header(current_phase=None):
 
 def render_sidebar(pharmacy_db):
     """
-    V5.0: Sidebar riscritta completamente con HTML/CSS/Container.
-    Zero widget nativi complessi (st.expander) per eliminare glitch grafici.
-    Solo emoji per icone.
+    V3.2: Sidebar riscritta completamente con icone Streamlit native e styling CSS.
+    Layout minimale: Stato connessione, Reset, Chiudi Chat.
     """
+    # CSS per migliorare leggibilità bottoni sidebar
+    st.markdown("""
+    <style>
+    /* Styling bottoni sidebar per leggibilità */
+    section[data-testid="stSidebar"] button {
+        color: #1e293b !important;
+        background-color: #f8fafc !important;
+        border: 1px solid #e2e8f0 !important;
+        font-weight: 500 !important;
+    }
+    section[data-testid="stSidebar"] button:hover {
+        background-color: #e2e8f0 !important;
+        border-color: #cbd5e1 !important;
+    }
+    /* Bottone Chiudi Chat con feedback visivo */
+    button[data-testid="baseButton-secondary"][aria-label*="Chiudi"] {
+        background-color: #fee2e2 !important;
+        border: 2px solid #dc2626 !important;
+        color: #991b1b !important;
+    }
+    button[data-testid="baseButton-secondary"][aria-label*="Chiudi"]:hover {
+        background-color: #fecaca !important;
+        border-color: #b91c1c !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     with st.sidebar:
         # === BRANDING SIRAYA ===
         st.markdown("""
@@ -1087,19 +1115,30 @@ def render_sidebar(pharmacy_db):
         
         st.divider()
         
-        # === BOTTONI AZIONE ===
-        if st.button("🔄 Nuova Sessione", use_container_width=True, key="sidebar_new_session"):
+        # === STATO CONNESSIONE ===
+        st.markdown("**📡 Stato Connessione**")
+        connection_status = st.session_state.get('ai_connection_status', 'unknown')
+        if connection_status == 'online':
+            st.success("✅ Connesso")
+        elif connection_status == 'offline':
+            st.error("❌ Offline")
+        else:
+            st.info("ℹ️ Verifica in corso...")
+        
+        st.divider()
+        
+        # === BOTTONI AZIONE MINIMALI ===
+        # Bottone Reset
+        if st.button("🔄 Reset Sessione", use_container_width=True, key="sidebar_reset"):
             for key in list(st.session_state.keys()):
-                del st.session_state[key]
+                if key not in ['log_file_path']:  # Mantieni path log centralizzato
+                    del st.session_state[key]
             st.rerun()
         
-        if st.session_state.get('medical_intent_detected', False):
-            if st.button("📋 Modalità Triage", use_container_width=True, key="sidebar_triage_mode", type="primary"):
-                st.session_state.triage_mode_active = True
-                st.info("Modalità triage attivata")
-        
-        if st.button("🆘 Emergenza 118", use_container_width=True, key="sidebar_sos_gps"):
-            st.error("⚠️ PER EMERGENZE MEDICHE CHIAMARE IL 118")
+        # Bottone Chiudi Chat (con icona corretta)
+        if st.button("✖️ Chiudi Chat", use_container_width=True, key="sidebar_close", type="secondary"):
+            st.session_state.chat_closed = True
+            st.info("💬 Chat chiusa. Clicca 'Reset Sessione' per riavviare.")
         
         st.divider()
         
@@ -3225,7 +3264,17 @@ def render_main_application():
         
         st.markdown("</div>", unsafe_allow_html=True)
 
-def main():
+def main(log_file_path: str = None):
+    """
+    Entry point principale del frontend.
+    
+    Args:
+        log_file_path: Path del file log centralizzato da app.py (opzionale)
+    """
+    # Usa il path centralizzato se fornito, altrimenti usa il default
+    global LOG_FILE
+    if log_file_path:
+        LOG_FILE = log_file_path
     """Entry point principale con landing page e triage condizionale."""
     # Import UI components
     try:

@@ -1,7 +1,7 @@
 # SIRAYA Health Navigator - Master Architecture Documentation
 **Data Creazione**: Gennaio 2026  
-**Versione**: 3.0 (Architettura Monolitica)  
-**Principio Architetturale**: Monolitica con Entry Point Unificato
+**Versione**: 3.2 (Architettura Monolitica con Persistenza Centralizzata)  
+**Principio Architetturale**: Monolitica con Entry Point Unificato e Gestione Log Centralizzata
 
 ---
 
@@ -47,36 +47,42 @@
 
 ## 2. SCHEMA DEI FLUSSI
 
-### 2.1 Flusso Triage Utente (Happy Path) - Architettura Monolitica V3
+### 2.1 Flusso Triage Utente (Happy Path) - Architettura Monolitica V3.2
 
 ```
 [Utente Browser] → http://localhost:8501 (app.py)
      ↓
-1. Selettore Modalità → st.sidebar.radio("🤖 Chatbot Triage" / "📈 Analytics Dashboard")
+1. Inizializzazione Persistenza → app.py definisce LOG_FILE_PATH assoluto
      ↓
-2a. Modalità "Chatbot Triage" → import frontend → frontend.main()
+2. Verifica/Creazione File Log → Se non esiste, crea triage_logs.jsonl vuoto
      ↓
-3. Consenso GDPR → init_session() → session_id generato
+3. Passa Path a Session State → st.session_state.log_file_path
      ↓
-2. Input sintomi → DataSecurity.sanitize_input()
+4. Selettore Modalità → st.sidebar.radio("🤖 Chatbot Triage" / "📈 Analytics Dashboard")
      ↓
-3. assess_emergency_level() → Classificazione urgenza (EmergencyLevel)
+5a. Modalità "Chatbot Triage" → import frontend → frontend.main(log_file_path=...)
      ↓
-4. stream_ai_response() → bridge.py
+6. Consenso GDPR → init_session() → session_id generato
      ↓
-5. ModelOrchestrator.generate_stream() → Groq/OpenAI API
+7. Input sintomi → DataSecurity.sanitize_input()
      ↓
-6. Streaming chunk → UI (placeholder.markdown)
+8. assess_emergency_level() → Classificazione urgenza (EmergencyLevel)
      ↓
-7. TriageResponse validato (Pydantic) → pending_survey
+9. stream_ai_response() → bridge.py
      ↓
-8. Rendering bottoni opzioni → Validazione InputValidator
+10. ModelOrchestrator.generate_stream() → Groq/OpenAI API
      ↓
-9. advance_step() → Progressione TriageStep (FSM)
+11. Streaming chunk → UI (placeholder.markdown)
      ↓
-10. DISPOSITION → render_disposition_summary()
+12. TriageResponse validato (Pydantic) → pending_survey
      ↓
-11. save_structured_log() → triage_logs.jsonl
+13. Rendering bottoni opzioni → Validazione InputValidator
+     ↓
+14. advance_step() → Progressione TriageStep (FSM)
+     ↓
+15. DISPOSITION → render_disposition_summary()
+     ↓
+16. save_structured_log() → Scrittura atomica su LOG_FILE_PATH centralizzato
 ```
 
 ### 2.2 Flusso Analytics Dashboard (V5.0 - Top Header Engine)
@@ -678,6 +684,46 @@ def check_backend_authentication():
 2. **send_triage_to_backend()**: Funzione deprecata (non più necessaria)
 3. **\_last_storage_sync**: Inizializzato a `0` invece di `None` (fix TypeError)
 4. **Sidebar Crash**: Inizializzazione corretta componenti per evitare crash all'apertura
+
+### 12.7 Changelog V3.2 (Gennaio 2026) - Centralizzazione Persistenza e Fix UI
+
+**🆕 Nuove Funzionalità:**
+
+1. **Centralizzazione Gestione Log (app.py)**
+   - ✅ Path assoluto `LOG_FILE_PATH` definito in `app.py` usando `Path(__file__).parent.absolute()`
+   - ✅ Verifica e creazione automatica file log all'avvio se non esiste
+   - ✅ Path passato a `frontend.py` e `backend.py` tramite parametro `log_file_path`
+   - ✅ Garantisce sincronizzazione corretta su Streamlit Cloud
+
+2. **Rewrite Sidebar Frontend**
+   - ✅ Sidebar minimale: Stato Connessione, Reset Sessione, Chiudi Chat
+   - ✅ Icone corrette: ✖️ per Chiudi Chat, 🔄 per Reset
+   - ✅ Styling CSS migliorato per leggibilità bottoni
+   - ✅ Feedback visivo chiaro per bottone "Chiudi Chat" (bordo rosso)
+
+3. **Fix Bug Scope Variabile (backend.py)**
+   - ✅ `filtered_datastore` inizializzato immediatamente dopo `datastore`
+   - ✅ Previene `UnboundLocalError` se i filtri falliscono
+   - ✅ Variabile sempre disponibile per calcoli KPI e export Excel
+
+4. **Export Excel Gestione No Data**
+   - ✅ Verifica presenza record prima di generare Excel
+   - ✅ Messaggio elegante "Nessun dato disponibile" se lista vuota
+   - ✅ Previene crash su export con filtri senza risultati
+
+**🔧 Fix Tecnici:**
+
+- ✅ `frontend.main()` e `backend.main()` accettano parametro `log_file_path`
+- ✅ Path log centralizzato mantenuto in `st.session_state.log_file_path`
+- ✅ Scrittura atomica continua a usare `flush()` + `os.fsync()`
+- ✅ Compatibilità backward: default path se parametro non fornito
+
+**📊 Metriche V3.2:**
+
+- **Persistenza**: Path centralizzato garantisce coerenza su Streamlit Cloud
+- **UI**: Sidebar minimale e leggibile
+- **Robustezza**: Zero crash su export Excel con dati vuoti
+- **Scope**: Variabili sempre inizializzate correttamente
 
 ### 12.6 Changelog V5.0 (Gennaio 2026) - MEGA-PROMPT Implementation
 
