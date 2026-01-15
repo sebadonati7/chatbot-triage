@@ -9,11 +9,19 @@ import math
 import difflib  # Aggiunta per il matching dei comuni
 import logging
 from collections import Counter  # For update_backend_metadata
+from pathlib import Path
 
 # Configurazione base del logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 from datetime import datetime
+
+# ============================================
+# PATH RESOLUTION ASSOLUTO (V3.2)
+# ============================================
+# Tutti i percorsi file sono risolti in modo assoluto basati sulla directory del file corrente
+# Questo garantisce accesso corretto alle risorse anche quando si naviga tra cartelle
+_BASE_DIR = Path(__file__).parent.absolute()
 
 # ============================================
 # IMPORT SESSION STORAGE
@@ -64,12 +72,17 @@ import groq
 def get_all_available_services():
     """Analizza tutti i JSON e crea un catalogo unico di servizi e tipologie."""
     catalog = set()
-    files = ["master_kb.json", "FARMACIE_EMILIA.json", "FARMACIE_ROMAGNA.json"]
+    # Path assoluti per garantire accesso corretto
+    files = [
+        _BASE_DIR / "master_kb.json",
+        _BASE_DIR / "knowledge_base" / "LOGISTIC" / "FARMACIE" / "FARMACIE_EMILIA.json",
+        _BASE_DIR / "knowledge_base" / "LOGISTIC" / "FARMACIE" / "FARMACIE_ROMAGNA.json"
+    ]
     
-    for f_name in files:
-        if os.path.exists(f_name):
+    for f_path in files:
+        if f_path.exists():
             try:
-                with open(f_name, 'r', encoding='utf-8') as f:
+                with open(f_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     # Gestione strutture (master_kb ha chiave 'facilities') o farmacie (lista)
                     items = data.get('facilities', []) if isinstance(data, dict) else data
@@ -77,7 +90,9 @@ def get_all_available_services():
                         if item.get('tipologia'): catalog.add(item['tipologia'])
                         for s in item.get('servizi_disponibili', []):
                             catalog.add(s)
-            except: continue
+            except Exception as e:
+                logger.warning(f"Errore caricamento {f_path}: {e}")
+                continue
     return sorted([s for s in catalog if s])
 
 def find_facilities_smart(query_service, query_comune):
@@ -87,14 +102,23 @@ def find_facilities_smart(query_service, query_comune):
     Implementa substring matching per trovare 'visita' in 'visita ginecologica'.
     """
     results = []
-    files = ["master_kb.json", "FARMACIE_EMILIA.json", "FARMACIE_ROMAGNA.json"]
+    # Path assoluti per garantire accesso corretto
+    files = [
+        _BASE_DIR / "master_kb.json",
+        _BASE_DIR / "knowledge_base" / "LOGISTIC" / "FARMACIE" / "FARMACIE_EMILIA.json",
+        _BASE_DIR / "knowledge_base" / "LOGISTIC" / "FARMACIE" / "FARMACIE_ROMAGNA.json"
+    ]
     
     all_items = []
-    for f_name in files:
-        if os.path.exists(f_name):
-            with open(f_name, 'r', encoding='utf-8') as f:
-                d = json.load(f)
-                all_items.extend(d.get('facilities', []) if isinstance(d, dict) else d)
+    for f_path in files:
+        if f_path.exists():
+            try:
+                with open(f_path, 'r', encoding='utf-8') as f:
+                    d = json.load(f)
+                    all_items.extend(d.get('facilities', []) if isinstance(d, dict) else d)
+            except Exception as e:
+                logger.warning(f"Errore caricamento {f_path}: {e}")
+                continue
 
     qs = query_service.lower()
     qc = query_comune.lower()
@@ -302,9 +326,8 @@ MODEL_CONFIG = {
 # V4.0: Modernizzazione architetturale - path assoluto per garantire coerenza
 # V5.0: Usa pathlib per path resolution dinamico e robusto
 # V3.2: Path centralizzato da app.py per garantire sincronizzazione Streamlit Cloud
-from pathlib import Path
-# Default path (usato se non passato da app.py)
-LOG_FILE = str(Path(__file__).parent.absolute() / "triage_logs.jsonl")
+# Path già importato sopra, usa _BASE_DIR
+LOG_FILE = str(_BASE_DIR / "triage_logs.jsonl")
 
 PHASES = [
     {"id": "IDENTIFICATION", "name": "Identificazione", "icon": "👤"},
@@ -314,9 +337,20 @@ PHASES = [
     {"id": "DISPOSITION", "name": "Conclusione Triage", "icon": "🏥"}
 ]
 # --- CARICAMENTO DATASET COMUNI EMILIA-ROMAGNA ---
-def load_comuni_er(filepath="mappa_er.json"):
+def load_comuni_er(filepath=None):
+    """
+    Carica comuni ER da mappa_er.json con path assoluto.
+    """
+    if filepath is None:
+        filepath = _BASE_DIR / "mappa_er.json"
+    else:
+        # Se fornito path relativo, convertilo in assoluto
+        if not Path(filepath).is_absolute():
+            filepath = _BASE_DIR / filepath
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        # Converti Path object a string se necessario
+        filepath_str = str(filepath) if isinstance(filepath, Path) else filepath
+        with open(filepath_str, "r", encoding="utf-8") as f:
             data = json.load(f)
             geoms = data.get("objects", {}).get("comuni", {}).get("geometries", [])
             return {g["properties"]["name"].lower().strip() for g in geoms if "name" in g["properties"]}
@@ -680,17 +714,27 @@ class InputValidator:
 # CARICAMENTO KNOWLEDGE BASE (Eseguito solo all'avvio)
 # =============================================================
 
-def load_master_kb(filepath="master_kb.json") -> Dict:
+def load_master_kb(filepath=None) -> Dict:
     """
     Carica la Knowledge Base delle strutture sanitarie in memoria.
     Questo evita di riaprire il file a ogni ricerca dell'utente.
+    Usa path assoluto per garantire accesso corretto.
     """
     try:
-        if not os.path.exists(filepath):
-            logger.error(f"File {filepath} non trovato. La ricerca strutture non funzionerà.")
+        if filepath is None:
+            filepath = _BASE_DIR / "master_kb.json"
+        else:
+            # Se fornito path relativo, convertilo in assoluto
+            if not Path(filepath).is_absolute():
+                filepath = _BASE_DIR / filepath
+        
+        filepath_str = str(filepath) if isinstance(filepath, Path) else filepath
+        
+        if not os.path.exists(filepath_str):
+            logger.error(f"File {filepath_str} non trovato. La ricerca strutture non funzionerà.")
             return {}
             
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath_str, 'r', encoding='utf-8') as f:
             data = json.load(f)
             # Logghiamo il numero di strutture caricate per tipo
             stats = {k: len(v) for k, v in data.items() if isinstance(v, list)}
@@ -715,17 +759,27 @@ FACILITIES_KB = load_master_kb()
 # CARICAMENTO DATASET (Eseguito una sola volta all'avvio)
 # =============================================================
 
-def load_geodata_er(filepath="mappa_er.json") -> Dict[str, Dict[str, Any]]:
+def load_geodata_er(filepath=None) -> Dict[str, Dict[str, Any]]:
     """
     Carica TUTTI i comuni e le loro proprietà dal Canvas mappa_er.json.
     Restituisce un dizionario ottimizzato per lookup rapidi.
+    Usa path assoluto per garantire accesso corretto.
     """
     try:
-        if not os.path.exists(filepath):
-            logger.error(f"File {filepath} non trovato.")
+        if filepath is None:
+            filepath = _BASE_DIR / "mappa_er.json"
+        else:
+            # Se fornito path relativo, convertilo in assoluto
+            if not Path(filepath).is_absolute():
+                filepath = _BASE_DIR / filepath
+        
+        filepath_str = str(filepath) if isinstance(filepath, Path) else filepath
+        
+        if not os.path.exists(filepath_str):
+            logger.error(f"File {filepath_str} non trovato.")
             return {}
 
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath_str, "r", encoding="utf-8") as f:
             data = json.load(f)
             geoms = data.get("objects", {}).get("comuni", {}).get("geometries", [])
             
@@ -889,20 +943,34 @@ class PharmacyService:
     Servizio logistico avanzato per la ricerca di farmacie in Emilia-Romagna.
     Integrazione intelligente con il database geografico regionale per ricerche di prossimità.
     """
-    def __init__(self, emilia_path: str = "FARMACIE_EMILIA.json", romagna_path: str = "FARMACIE_ROMAGNA.json"):
+    def __init__(self, emilia_path: str = None, romagna_path: str = None):
+        """
+        Inizializza database farmacie con path assoluti.
+        """
+        if emilia_path is None:
+            emilia_path = str(_BASE_DIR / "knowledge_base" / "LOGISTIC" / "FARMACIE" / "FARMACIE_EMILIA.json")
+        elif not Path(emilia_path).is_absolute():
+            emilia_path = str(_BASE_DIR / "knowledge_base" / "LOGISTIC" / "FARMACIE" / emilia_path)
+        
+        if romagna_path is None:
+            romagna_path = str(_BASE_DIR / "knowledge_base" / "LOGISTIC" / "FARMACIE" / "FARMACIE_ROMAGNA.json")
+        elif not Path(romagna_path).is_absolute():
+            romagna_path = str(_BASE_DIR / "knowledge_base" / "LOGISTIC" / "FARMACIE" / romagna_path)
         self.data = self._load_all_data(emilia_path, romagna_path)
         # Lista di tutti i comuni presenti nel database farmacie
         self.cities_in_db = sorted(list(set(f['comune'].lower() for f in self.data)))
 
     def _load_all_data(self, p1: str, p2: str) -> List[Dict]:
-        """Carica e unisce i database regionali."""
+        """Carica e unisce i database regionali con path assoluti."""
         combined = []
         for path in [p1, p2]:
-            if os.path.exists(path):
+            path_str = str(path) if isinstance(path, Path) else path
+            if os.path.exists(path_str):
                 try:
-                    with open(path, 'r', encoding='utf-8') as f:
+                    with open(path_str, 'r', encoding='utf-8') as f:
                         combined.extend(json.load(f))
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Errore caricamento {path_str}: {e}")
                     continue
         return combined
 
@@ -1073,12 +1141,12 @@ def render_sidebar(pharmacy_db):
     V3.2: Sidebar riscritta completamente con icone Streamlit native e styling CSS.
     Layout minimale: Stato connessione, Reset, Chiudi Chat.
     """
-    # CSS per migliorare leggibilità bottoni sidebar
+    # CSS per migliorare leggibilità bottoni sidebar e garantire contrasto
     st.markdown("""
     <style>
-    /* Styling bottoni sidebar per leggibilità */
+    /* Styling bottoni sidebar per leggibilità - contrasto garantito */
     section[data-testid="stSidebar"] button {
-        color: #1e293b !important;
+        color: #1A1C1F !important;
         background-color: #f8fafc !important;
         border: 1px solid #e2e8f0 !important;
         font-weight: 500 !important;
@@ -1086,16 +1154,28 @@ def render_sidebar(pharmacy_db):
     section[data-testid="stSidebar"] button:hover {
         background-color: #e2e8f0 !important;
         border-color: #cbd5e1 !important;
+        color: #1A1C1F !important;
     }
-    /* Bottone Chiudi Chat con feedback visivo */
-    button[data-testid="baseButton-secondary"][aria-label*="Chiudi"] {
+    /* Bottone Chiudi Chat con feedback visivo chiaro */
+    button[data-testid="baseButton-secondary"][aria-label*="Chiudi"],
+    button[data-testid="baseButton-secondary"]:has-text("Chiudi") {
         background-color: #fee2e2 !important;
         border: 2px solid #dc2626 !important;
         color: #991b1b !important;
     }
-    button[data-testid="baseButton-secondary"][aria-label*="Chiudi"]:hover {
+    button[data-testid="baseButton-secondary"][aria-label*="Chiudi"]:hover,
+    button[data-testid="baseButton-secondary"]:has-text("Chiudi"):hover {
         background-color: #fecaca !important;
         border-color: #b91c1c !important;
+        color: #7f1d1d !important;
+    }
+    /* Forza contrasto testo su tutti i bottoni sidebar */
+    section[data-testid="stSidebar"] .stButton > button {
+        color: #1A1C1F !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button:not([type="primary"]) {
+        background-color: #ffffff !important;
+        color: #1A1C1F !important;
     }
     </style>
     """, unsafe_allow_html=True)

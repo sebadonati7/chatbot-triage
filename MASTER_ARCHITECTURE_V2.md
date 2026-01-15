@@ -1,7 +1,7 @@
 # SIRAYA Health Navigator - Master Architecture Documentation
 **Data Creazione**: Gennaio 2026  
-**Versione**: 3.2 (Architettura Monolitica con Persistenza Centralizzata)  
-**Principio Architetturale**: Monolitica con Entry Point Unificato e Gestione Log Centralizzata
+**Versione**: 3.2.1 (Architettura Monolitica con Persistenza Centralizzata e Path Resolution)  
+**Principio Architetturale**: Monolitica con Entry Point Unificato, Gestione Log Centralizzata e Path Assoluti
 
 ---
 
@@ -684,6 +684,41 @@ def check_backend_authentication():
 2. **send_triage_to_backend()**: Funzione deprecata (non più necessaria)
 3. **\_last_storage_sync**: Inizializzato a `0` invece di `None` (fix TypeError)
 4. **Sidebar Crash**: Inizializzazione corretta componenti per evitare crash all'apertura
+
+### 12.8 Changelog V3.2.1 (Gennaio 2026) - UI Repair & Path Resolution
+
+**🆕 Nuove Funzionalità:**
+
+1. **Path Resolution Assoluto (frontend.py)**
+   - ✅ Costante `_BASE_DIR` definita all'inizio del file per path resolution assoluto
+   - ✅ Tutti i file JSON (master_kb.json, FARMACIE_*.json, mappa_er.json) usano path assoluti
+   - ✅ Funzioni `load_master_kb()`, `load_comuni_er()`, `load_geodata_er()` aggiornate
+   - ✅ Classe `PharmacyService` aggiornata per usare path assoluti
+   - ✅ Garantisce accesso corretto alle risorse anche quando si naviga tra cartelle
+
+2. **Cleanup File Config Obsoleti**
+   - ✅ Rimosso file `.streamlit/config` malformato (non TOML)
+   - ✅ Streamlit usa solo `config.toml` per configurazione
+
+3. **Miglioramento CSS Bottoni Sidebar**
+   - ✅ Contrasto garantito: `color: #1A1C1F !important` su tutti i bottoni
+   - ✅ Background solido `#f8fafc` per evitare effetto "bianco su bianco"
+   - ✅ Styling migliorato per bottone "Chiudi Chat" con feedback visivo chiaro
+   - ✅ Regole CSS più specifiche per garantire applicazione corretta
+
+**🔧 Fix Tecnici:**
+
+- ✅ Eliminato doppio import di `Path` in frontend.py
+- ✅ Tutti i path relativi convertiti in assoluti basati su `_BASE_DIR`
+- ✅ Gestione errori migliorata con logging per file mancanti
+- ✅ Compatibilità mantenuta: path relativi vengono convertiti automaticamente in assoluti
+
+**📊 Metriche V3.2.1:**
+
+- **Robustezza Path**: 100% file JSON usano path assoluti
+- **UI Contrast**: Contrasto garantito su tutti i bottoni sidebar
+- **File System**: Zero errori "File Not Found" per navigazione tra cartelle
+- **Cleanup**: File config obsoleti rimossi
 
 ### 12.7 Changelog V3.2 (Gennaio 2026) - Centralizzazione Persistenza e Fix UI
 
