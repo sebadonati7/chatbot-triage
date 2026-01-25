@@ -176,9 +176,9 @@ if 'service_catalog' not in st.session_state:
         # Fallback se i file mancano
         st.session_state.service_catalog = ["Pronto Soccorso", "CAU", "Guardia Medica", "Farmacia"]
 
-# --- STILI CSS SIRAYA BRAND (Inject via UI Components) ---
-# CSS is now injected via ui_components.inject_siraya_css() in main()
-# Keeping minimal overrides here if needed
+# --- STILI CSS SIRAYA BRAND ---
+# CSS is injected inline in render_main_application() and main()
+# No external dependency on ui_components for CSS
 st.markdown("""
 <style>
     /* Minimal legacy overrides - main theme in ui_components.py */
@@ -3258,14 +3258,44 @@ def main(log_file_path: str = None):
     """Entry point principale con landing page e triage condizionale."""
     # Import UI components - NO TRY/EXCEPT: Let it fail loudly to see real error
     from ui_components import (
-        inject_siraya_css,
         detect_medical_intent,
         get_bot_avatar,
         get_chat_placeholder
     )
     
-    # Inject SIRAYA CSS Theme (Medical Professional)
-    inject_siraya_css()
+    # --- GLOBAL STYLING (Blue Sidebar) ---
+    # CSS inline per evitare dipendenze da ui_components
+    st.markdown("""
+    <style>
+        /* Force Sidebar Background to Medical Blue */
+        [data-testid="stSidebar"] {
+            background-color: #f0f4f8 !important;
+            background-image: linear-gradient(180deg, #E3F2FD 0%, #FFFFFF 100%) !important;
+            border-right: 1px solid #d1d5db !important;
+        }
+        /* Fix Text Color in Sidebar */
+        [data-testid="stSidebar"] .stMarkdown, 
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] h4 {
+            color: #1f2937 !important;
+        }
+        /* Button styling in sidebar */
+        [data-testid="stSidebar"] button {
+            background-color: #ffffff !important;
+            color: #1f2937 !important;
+            border: 1px solid #d1d5db !important;
+        }
+        [data-testid="stSidebar"] button:hover {
+            background-color: #e3f2fd !important;
+            border-color: #90caf9 !important;
+        }
+        /* Hide Streamlit default anchors */
+        .st-emotion-cache-15zrgzn {display: none;}
+    </style>
+    """, unsafe_allow_html=True)
     
     # Initialize medical intent tracking
     if 'medical_intent_detected' not in st.session_state:
