@@ -31,18 +31,19 @@ def init_supabase():
         key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY"))
         
         if not url or not key:
-            st.warning("⚠️ Credenziali Supabase non trovate. Logging disabilitato.")
+            # Silent warning - non usare st.warning qui (causa errori in import)
+            print("⚠️ Credenziali Supabase non trovate. Logging disabilitato.")
             return None
         
         client: Client = create_client(url, key)
-        st.success("✅ Connessione Supabase attiva", icon="🔗")
+        print("✅ Connessione Supabase attiva")
         return client
         
     except ImportError:
-        st.error("❌ Libreria supabase non installata. Esegui: pip install supabase")
+        print("❌ Libreria supabase non installata. Esegui: pip install supabase")
         return None
     except Exception as e:
-        st.error(f"❌ Errore connessione Supabase: {e}")
+        print(f"❌ Errore connessione Supabase: {e}")
         return None
 
 
@@ -191,7 +192,8 @@ class SupabaseLogger:
             return all_records
             
         except Exception as e:
-            st.error(f"❌ Errore recupero log completi: {e}")
+            # Silent error - non usare st.error qui (causa problemi in import)
+            print(f"❌ Errore recupero log completi: {e}")
             return []
 
 

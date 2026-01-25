@@ -1533,36 +1533,59 @@ def save_to_supabase_log(user_input: str, bot_response: str, metadata: dict, dur
         return False
     
     try:
-        from session_storage import get_logger
-        
-        logger_db = get_logger()
-        
-        if not logger_db.client:
-            logger.warning("⚠️ Supabase non disponibile, log non salvato")
+        # Import funzione log da session_storage
+        try:
+            from session_storage import init_supabase
+            
+            client = init_supabase()
+            
+            if not client:
+                logger.warning("⚠️ Supabase non disponibile, log non salvato")
+                return False
+            
+            # Ottieni session_id
+            session_id = st.session_state.get('session_id', 'unknown')
+            
+            # Prepara payload schema-compliant
+            payload = {
+                # Core fields
+                "session_id": session_id,
+                "created_at": datetime.utcnow().isoformat(),
+                "user_input": user_input,
+                "bot_response": bot_response,
+                
+                # Clinical KPI
+                "detected_intent": metadata.get('intent', metadata.get('detected_intent', 'triage')),
+                "triage_code": metadata.get('triage_code') or metadata.get('codice_urgenza') or metadata.get('urgency_code', 'N/D'),
+                "medical_specialty": metadata.get('medical_specialty') or metadata.get('specialization', 'Generale'),
+                "suggested_facility_type": metadata.get('suggested_facility_type') or metadata.get('destinazione', 'N/D'),
+                "reasoning": metadata.get('reasoning', ''),
+                "estimated_wait_time": str(metadata.get('wait_time', metadata.get('estimated_wait_time', ''))),
+                
+                # Technical KPI
+                "processing_time_ms": duration_ms,
+                "model_version": metadata.get('model', metadata.get('model_version', 'v2.0')),
+                "tokens_used": int(metadata.get('tokens', metadata.get('tokens_used', 0))),
+                "client_ip": metadata.get('client_ip', ''),
+                
+                # Metadata dump (full JSON)
+                "metadata": json.dumps(metadata, ensure_ascii=False)
+            }
+            
+            # Insert su Supabase
+            response = client.table("triage_logs").insert(payload).execute()
+            
+            if response.data:
+                logger.info(f"✅ Log salvato su Supabase per sessione {session_id}")
+                return True
+            else:
+                logger.warning(f"⚠️ Errore salvataggio log su Supabase")
+                return False
+                
+        except ImportError:
+            logger.error("❌ session_storage non disponibile")
             return False
-        
-        # Ottieni session_id
-        session_id = st.session_state.get('session_id', 'unknown')
-        
-        # Salva su Supabase
-        success = logger_db.log_interaction(
-            session_id=session_id,
-            user_input=user_input,
-            bot_response=bot_response,
-            metadata=metadata,
-            duration_ms=duration_ms
-        )
-        
-        if success:
-            logger.info(f"✅ Log salvato su Supabase per sessione {session_id}")
-        else:
-            logger.warning(f"⚠️ Errore salvataggio log su Supabase")
-        
-        return success
-        
-    except ImportError:
-        logger.error("❌ session_storage non disponibile")
-        return False
+            
     except Exception as e:
         logger.error(f"❌ Errore save_to_supabase_log: {e}")
         return False
