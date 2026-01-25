@@ -1699,16 +1699,23 @@ def render_dashboard(log_file_path: str = None):
         st.info("💡 Prova a modificare i filtri temporali o geografici.")
         return
     
-    # === INLINE CSS (No external imports) ===
-    st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-    * { font-family: 'Inter', sans-serif !important; }
-    .stApp { background-color: #f8fafc; }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    </style>
-    """, unsafe_allow_html=True)
+    # === INJECT SIRAYA CSS ===
+    try:
+        from ui_components import inject_siraya_css
+        inject_siraya_css()
+    except ImportError:
+        # Fallback CSS if ui_components not available
+        st.markdown("""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        * { font-family: 'Inter', sans-serif !important; }
+        .stApp { background-color: #f8fafc; }
+        section[data-testid="stSidebar"] { background-color: #1e293b !important; }
+        section[data-testid="stSidebar"] * { color: #e2e8f0 !important; }
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        </style>
+        """, unsafe_allow_html=True)
     
     # === MAIN DASHBOARD ===
     st.title("🧬 SIRAYA Analytics | Dashboard Professionale")
@@ -1787,7 +1794,9 @@ def render_dashboard(log_file_path: str = None):
     
     st.markdown("---")
     
-    # === KPI DISPLAY (All KPIs shown by default) ===
+    # === KPI SELECTOR (Multiselect) - Rimosso sidebar, integrato nel layout principale ===
+    # KPI vengono mostrati tutti di default (no sidebar selector)
+    show_all_kpis = True
     
     # === CALCOLO KPI CON PROTEZIONE ERRORI ===
     try:
@@ -1847,33 +1856,37 @@ def render_dashboard(log_file_path: str = None):
         st.error(f"❌ Errore rendering throughput: {e}")
     
     # === SEZIONE 2: KPI CLINICI ===
-    st.header("🏥 KPI Clinici ed Epidemiologici")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.metric("Prevalenza Red Flags", f"{kpi_clin.get('prevalenza_red_flags', 0):.1f}%")
+    if show_all_kpis or any("Clinici" in kpi for kpi in selected_kpis):
+        st.header("🏥 KPI Clinici ed Epidemiologici")
         
-        # Red Flags Dettaglio
-        if kpi_clin.get('red_flags_dettaglio'):
-            st.subheader("🚨 Red Flags per Tipo")
-            rf_list = sorted(kpi_clin['red_flags_dettaglio'].items(), key=lambda x: x[1], reverse=True)
-            for rf, count in rf_list[:10]:
-                st.write(f"**{rf.title()}**: {count}")
-    
-    with col2:
-        try:
-            render_urgenza_pie(kpi_clin)
-        except Exception as e:
-            st.error(f"❌ Errore rendering urgenza: {e}")
-    
-    st.divider()
-    
-    # Spettro Sintomi Completo (con gestione errori)
-    try:
-        render_sintomi_table(kpi_clin)
-    except Exception as e:
-        st.error(f"❌ Errore rendering sintomi: {e}")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if show_all_kpis or "Clinici: Red Flags" in selected_kpis:
+                st.metric("Prevalenza Red Flags", f"{kpi_clin.get('prevalenza_red_flags', 0):.1f}%")
+                
+                # Red Flags Dettaglio
+                if kpi_clin.get('red_flags_dettaglio'):
+                    st.subheader("🚨 Red Flags per Tipo")
+                    rf_list = sorted(kpi_clin['red_flags_dettaglio'].items(), key=lambda x: x[1], reverse=True)
+                    for rf, count in rf_list[:10]:
+                        st.write(f"**{rf.title()}**: {count}")
+        
+        with col2:
+            if show_all_kpis or "Clinici: Stratificazione Urgenza" in selected_kpis:
+                try:
+                    render_urgenza_pie(kpi_clin)
+                except Exception as e:
+                    st.error(f"❌ Errore rendering urgenza: {e}")
+        
+        st.divider()
+        
+        # Spettro Sintomi Completo (con gestione errori)
+        if show_all_kpis or "Clinici: Spettro Sintomi" in selected_kpis:
+            try:
+                render_sintomi_table(kpi_clin)
+            except Exception as e:
+                st.error(f"❌ Errore rendering sintomi: {e}")
     
     # === SEZIONE 3: KPI CONTEXT-AWARE ===
     st.header("🎯 KPI Context-Aware")

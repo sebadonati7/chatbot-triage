@@ -1,12 +1,11 @@
 ﻿"""
 SIRAYA Health Navigator - Session Storage & Supabase Integration
-V5.0: Zero-File Policy - Full migration to Supabase
-Clean Slate: Only functions used by frontend.py
+V4.0: Zero-File Policy - Full migration to Supabase
 """
 
 import os
 import json
-import uuid
+import time
 import streamlit as st
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -181,26 +180,38 @@ class SupabaseLogger:
                     .execute()
                 )
                 
+                # DEBUG: Print response details
+                print(f"🔍 DEBUG: Supabase query response status: {response}")
+                print(f"🔍 DEBUG: Response.data type: {type(response.data)}")
+                print(f"🔍 DEBUG: Response.data length: {len(response.data) if response.data else 0}")
+                
                 if not response.data:
+                    print(f"🔍 DEBUG: No data in response (offset={offset})")
                     break
                 
                 all_records.extend(response.data)
+                print(f"🔍 DEBUG: Accumulated {len(all_records)} records so far")
                 
                 # Se riceviamo meno di page_size record, abbiamo finito
                 if len(response.data) < page_size:
+                    print(f"🔍 DEBUG: Last page received ({len(response.data)} < {page_size}), stopping")
                     break
                 
                 offset += page_size
             
+            print(f"🔍 DEBUG: Total records retrieved: {len(all_records)}")
             return all_records
             
         except Exception as e:
+            # Print full error trace for debugging
+            import traceback
             print(f"❌ Errore recupero log completi: {e}")
+            print(f"🔍 DEBUG: Full traceback:\n{traceback.format_exc()}")
             return []
 
 
 # ============================================================================
-# SINGLETON & FACTORY
+# FACTORY FUNCTION
 # ============================================================================
 
 _logger_singleton: Optional[SupabaseLogger] = None
@@ -219,69 +230,113 @@ def get_logger() -> SupabaseLogger:
 
 
 # ============================================================================
-# FRONTEND.PY INTERFACE FUNCTIONS
+# LEGACY FILE-BASED STORAGE (Deprecated - manteniamo per compatibilità)
 # ============================================================================
 
-def init_session_state():
+SESSIONS_DIR = os.environ.get("SESSION_STORAGE_DIR", "sessions")
+
+class FileSessionStorage:
     """
-    Inizializza tutte le variabili di sessione necessarie per frontend.py.
-    Chiamata una volta all'avvio dell'applicazione.
+    DEPRECATED: Storage basato su file JSON nella cartella `sessions/`.
+    Manteniamo per compatibilità legacy, ma si consiglia Supabase.
     """
-    # Session ID univoco
-    if "session_id" not in st.session_state:
-        st.session_state.session_id = str(uuid.uuid4())
-    
-    # Chat messages history
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    
-    # Privacy acceptance flag
-    if "privacy_accepted" not in st.session_state:
-        st.session_state.privacy_accepted = False
-    
-    # Triage data collection
-    if "collected_data" not in st.session_state:
-        st.session_state.collected_data = {}
-    
-    # Current triage step
-    if "current_step" not in st.session_state:
-        st.session_state.current_step = "INIT"
-    
-    # Specialization (for routing)
-    if "specialization" not in st.session_state:
-        st.session_state.specialization = "Generale"
-    
-    # Location (comune)
-    if "location" not in st.session_state:
-        st.session_state.location = ""
+    def __init__(self, base_dir: str = SESSIONS_DIR):
+        self.base_dir = os.path.abspath(base_dir)
+        os.makedirs(self.base_dir, exist_ok=True)
+
+    def _path(self, session_id: str) -> str:
+        safe_id = "".join(c for c in session_id if c.isalnum() or c in "-_.")
+        return os.path.join(self.base_dir, f"{safe_id}.json")
+
+    def load_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        p = self._path(session_id)
+        if not os.path.exists(p):
+            return None
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def save_session(self, session_id: str, data: Dict[str, Any]) -> bool:
+        p = self._path(session_id)
+        try:
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, p)
+            return True
+        except Exception:
+            return False
+
+    def delete_session(self, session_id: str) -> bool:
+        p = self._path(session_id)
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+                return True
+            return False
+        except Exception:
+            return False
+
+    def list_active_sessions(self) -> List[Dict[str, Any]]:
+        results = []
+        for fn in os.listdir(self.base_dir):
+            if fn.endswith(".json"):
+                p = os.path.join(self.base_dir, fn)
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    results.append({
+                        "session_id": fn[:-5],
+                        "last_modified": time.ctime(os.path.getmtime(p)),
+                        "snapshot": data
+                    })
+                except Exception:
+                    continue
+        return results
+
+    def cleanup_old_sessions(self, max_age_hours: int = 24) -> int:
+        now = time.time()
+        cutoff = now - max_age_hours * 3600
+        deleted = 0
+        for fn in os.listdir(self.base_dir):
+            if fn.endswith(".json"):
+                p = os.path.join(self.base_dir, fn)
+                try:
+                    if os.path.getmtime(p) < cutoff:
+                        os.remove(p)
+                        deleted += 1
+                except Exception:
+                    continue
+        return deleted
 
 
-def log_interaction_supabase(
-    user_input: str,
-    bot_response: str,
-    metadata: Dict[str, Any],
-    duration_ms: int = 0
-) -> bool:
-    """
-    Wrapper per logging interazione su Supabase.
-    Usa session_id dalla sessione corrente.
-    
-    Args:
-        user_input: Messaggio utente
-        bot_response: Risposta bot
-        metadata: Metadati aggiuntivi
-        duration_ms: Durata risposta AI in millisecondi
-    
-    Returns:
-        bool: True se salvato con successo
-    """
-    logger = get_logger()
-    session_id = st.session_state.get("session_id", str(uuid.uuid4()))
-    
-    return logger.log_interaction(
-        session_id=session_id,
-        user_input=user_input,
-        bot_response=bot_response,
-        metadata=metadata,
-        duration_ms=duration_ms
-    )
+_storage_singleton: Optional[FileSessionStorage] = None
+
+def get_storage() -> FileSessionStorage:
+    """DEPRECATED: Usa get_logger() per Supabase invece."""
+    global _storage_singleton
+    if _storage_singleton is None:
+        _storage_singleton = FileSessionStorage()
+    return _storage_singleton
+
+
+def sync_session_to_storage(session_id: str, session_state: Any) -> bool:
+    """DEPRECATED: Compatibilità legacy."""
+    storage = get_storage()
+    data = {}
+    for key, value in session_state.items():
+        if not key.startswith('_') and key != 'rerun':
+            try:
+                json.dumps(value, default=str)
+                data[key] = value
+            except (TypeError, ValueError):
+                continue
+    return storage.save_session(session_id, data)
+
+
+def load_session_from_storage(session_id: str) -> Optional[Dict[str, Any]]:
+    """DEPRECATED: Compatibilità legacy."""
+    storage = get_storage()
+    return storage.load_session(session_id)
