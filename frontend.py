@@ -1499,57 +1499,68 @@ def save_interaction_log(user_input: str, bot_response: str):
     DEPRECATED: Ora usa save_to_supabase_log() direttamente.
     Mantenuta per compatibilità con codice legacy.
     """
+    # 1. Verifica consenso privacy
     if not st.session_state.get("privacy_accepted", False):
         return
     
-    try:
-    # 1. Preparazione Metadati
-    current_step = st.session_state.get('current_step', TriageStep.LOCATION)
-    
-    metadata = {
-        "step": current_step.name if hasattr(current_step, 'name') else str(current_step),
-        "specialization": st.session_state.get('specialization', 'Generale'),
-        "urgency_level": st.session_state.collected_data.get('DISPOSITION', {}).get('urgency', 3),
-        "location": st.session_state.collected_data.get('LOCATION'),
-        "version": "interaction-1.0"
-    }
+    # Recupero session_id in modo sicuro
+    session_id = st.session_state.get("session_id", "unknown_session")
 
-    # 2. Tentativo salvataggio su Supabase (Prioritario)
-    save_to_supabase_log(
-        user_input=user_input,
-        bot_response=bot_response,
-        metadata=metadata,
-        duration_ms=0
-    )
-    logger.debug(f"✅ Interaction log salvato su Supabase: session={session_id}")
-
-except Exception as e:
-    logger.warning(f"⚠️ Errore salvataggio Supabase: {e}. Attivazione fallback locale.")
-    
-    # 3. Fallback: Salvataggio su File Locale (Solo se Supabase fallisce)
     try:
-        # Ricostruiamo l'oggetto log per il file locale
-        log_entry = {
-            "session_id": session_id,
-            "timestamp": datetime.now().isoformat(),
-            "user_input": user_input,
-            "bot_response": bot_response,
-            "metadata": metadata
+        # 2. Preparazione Metadati
+        current_step = st.session_state.get('current_step', TriageStep.LOCATION)
+        
+        # Gestione sicura del nome dello step (se è enum o stringa)
+        step_name = current_step.name if hasattr(current_step, 'name') else str(current_step)
+        
+        metadata = {
+            "step": step_name,
+            "specialization": st.session_state.get('specialization', 'Generale'),
+            "urgency_level": st.session_state.collected_data.get('DISPOSITION', {}).get('urgency', 3),
+            "location": st.session_state.collected_data.get('LOCATION'),
+            "version": "interaction-1.0"
         }
-        
-        # Apertura sicura del file (evita 'name f is not defined')
-        with open("triage_logs.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
-            f.flush()
-            os.fsync(f.fileno())
+
+        # 3. Tentativo salvataggio su Supabase (Prioritario)
+        # Nota: duration_ms impostato a 0 perché questa funzione legacy non tracciava il tempo
+        if 'save_to_supabase_log' in globals():
+            save_to_supabase_log(
+                user_input=user_input,
+                bot_response=bot_response,
+                metadata=metadata,
+                duration_ms=0
+            )
+        else:
+            # Se la funzione non è importata, solleva errore per attivare il fallback
+            raise NameError("save_to_supabase_log non definita")
             
-        logger.info(f"✅ Salvataggio fallback locale riuscito.")
+        logger.debug(f"✅ Interaction log salvato su Supabase: session={session_id}")
+
+    except Exception as e:
+        logger.warning(f"⚠️ Errore salvataggio Supabase: {e}. Attivazione fallback locale.")
         
-    except Exception as e_local:
-        # Se fallisce anche il file locale, registriamo l'errore critico
-        logger.error(f"❌ Fallimento critico salvataggio (Supabase + File): {e_local}")
-
-
+        # 4. Fallback: Salvataggio su File Locale (Solo se Supabase fallisce)
+        try:
+            # Ricostruiamo l'oggetto log per il file locale
+            log_entry = {
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat(),
+                "user_input": user_input,
+                "bot_response": bot_response,
+                "metadata": metadata
+            }
+            
+            # Apertura sicura del file
+            with open("triage_logs.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+                f.flush()
+                os.fsync(f.fileno())
+                
+            logger.info(f"✅ Salvataggio fallback locale riuscito.")
+            
+        except Exception as e_local:
+            # Se fallisce anche il file locale, registriamo l'errore critico
+            logger.error(f"❌ Fallimento critico salvataggio (Supabase + File): {e_local}")
 # PARTE 2: Logging Strutturato per Backend Analytics (Summary - Legacy)
 # SIRAYA 2026 Evolution: Usa LogManager atomico per scrittura thread-safe
 def save_to_supabase_log(user_input: str, bot_response: str, metadata: dict, duration_ms: int = 0):
