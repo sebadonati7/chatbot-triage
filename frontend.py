@@ -2980,34 +2980,18 @@ def render_main_application():
             st.rerun()
         return
 
-    # STEP 2: Rendering UI principale con sidebar unificata
-    # Sidebar Navigation (V4.0: usa ui_components)
+    # --- SIDEBAR & NAVIGATION (NO LEGACY FALLBACK) ---
+    # Import diretto: se fallisce, vogliamo vedere l'errore a schermo per debuggarlo!
     with st.sidebar:
-        try:
-            # Tenta di caricare la nuova UI
-            from ui_components import render_navigation_sidebar
-            selected_page = render_navigation_sidebar()
-            st.session_state.selected_page = selected_page
-        except ImportError as e:
-            # Se fallisce, mostra l'errore MA usa una navigazione minimale (NON la vecchia sidebar)
-            st.error(f"UI Error: {e}")
-            st.warning("Check session_storage.py for st. calls outside context")
-            selected_page = st.radio("Navigazione (Fallback)", ["🤖 Chatbot Triage", "📊 Analytics Dashboard"])
-            st.session_state.selected_page = selected_page
+        from ui_components import render_navigation_sidebar
+        selected_page = render_navigation_sidebar()
+        st.session_state.selected_page = selected_page
     
-    # Gestione Routing SPA
+    # Routing
     if "Analytics" in str(selected_page):
-        try:
-            import backend
-            backend.render_dashboard()
-            return  # Stop chat execution - mostra solo dashboard
-        except ImportError as e:
-            st.error(f"❌ Errore caricamento Analytics: {e}")
-            st.info("💡 Verifica che backend.py sia presente nella directory root.")
-            return
-        except Exception as e:
-            st.error(f"❌ Errore imprevisto Analytics: {e}")
-            return
+        import backend
+        backend.render_dashboard()
+        return  # Stop chat execution - mostra solo dashboard
     
     # STEP 3: Continua con Chatbot (se non Analytics)
     render_dynamic_step_tracker()
