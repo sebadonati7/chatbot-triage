@@ -150,7 +150,8 @@ class SupabaseLogger:
             return response.data if response.data else []
             
         except Exception as e:
-            st.error(f"❌ Errore recupero log: {e}")
+            # Silent error - non usare st.error qui (causa problemi in import)
+            print(f"❌ Errore recupero log: {e}")
             return []
     
     def get_all_logs_for_analytics(self) -> List[Dict]:

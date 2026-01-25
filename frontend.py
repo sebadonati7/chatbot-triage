@@ -1371,6 +1371,9 @@ def generate_ai_reply(prompt_text: str) -> Optional[str]:
             typing = st.empty()
             typing.markdown('<div class="typing-indicator">🔄 Analisi in corso...</div>', unsafe_allow_html=True)
             
+            # Timer per durata risposta AI
+            start_time = time.time()
+            
             res_gen = stream_ai_response(
                 st.session_state.orchestrator,
                 st.session_state.messages,
@@ -1399,6 +1402,9 @@ def generate_ai_reply(prompt_text: str) -> Optional[str]:
                     ai_response = final_obj.get("testo", "")
                     if ai_response:
                         placeholder.markdown(ai_response)
+            
+            # Calcola durata risposta
+            duration_ms = int((time.time() - start_time) * 1000)
         
         # Salva risposta AI in cronologia
         if ai_response:
@@ -1407,6 +1413,37 @@ def generate_ai_reply(prompt_text: str) -> Optional[str]:
                 "content": ai_response
             })
             logger.info(f"✅ Risposta AI generata: {len(ai_response)} caratteri")
+            
+            # V4.0: Salva su Supabase (real-time logging)
+            try:
+                # Estrai metadati da final_obj se disponibile
+                metadata = {}
+                if final_obj:
+                    metadata = final_obj.get('metadata', {})
+                    # Aggiungi dati aggiuntivi
+                    metadata.update({
+                        'triage_step': phase_id,
+                        'specialization': st.session_state.get('specialization', 'Generale'),
+                        'urgency_code': metadata.get('urgenza', metadata.get('urgency_level', 3)),
+                        'collected_data': st.session_state.collected_data
+                    })
+                else:
+                    # Fallback metadata
+                    metadata = {
+                        'triage_step': phase_id,
+                        'specialization': st.session_state.get('specialization', 'Generale'),
+                        'urgency_code': st.session_state.collected_data.get('DISPOSITION', {}).get('urgency', 3)
+                    }
+                
+                # Salva su Supabase
+                save_to_supabase_log(
+                    user_input=user_input,
+                    bot_response=ai_response,
+                    metadata=metadata,
+                    duration_ms=duration_ms
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Errore logging Supabase: {e}")
         else:
             fallback_msg = "Mi dispiace, non ho ricevuto una risposta valida. Riprova."
             st.session_state.messages.append({
@@ -1456,25 +1493,16 @@ def generate_ai_reply(prompt_text: str) -> Optional[str]:
 # ============================================
 def save_interaction_log(user_input: str, bot_response: str):
     """
-    V6.0: Salva ogni interazione in formato flat JSON (interaction-based).
+    V4.0: Salva ogni interazione su Supabase (Zero-File Policy).
     Chiamata dopo ogni risposta AI per visibilità real-time nella dashboard.
     
-    Schema flat:
-    {
-        "session_id": "...",
-        "timestamp": "...",
-        "user_input": "...",
-        "bot_response": "...",
-        "metadata": {...}
-    }
+    DEPRECATED: Ora usa save_to_supabase_log() direttamente.
+    Mantenuta per compatibilità con codice legacy.
     """
     if not st.session_state.get("privacy_accepted", False):
         return
     
     try:
-        session_id = st.session_state.get('session_id', f"unknown_{int(time.time())}")
-        timestamp = datetime.now().isoformat()
-        
         # Estrai metadati rilevanti
         current_step = st.session_state.get('current_step', TriageStep.LOCATION)
         metadata = {
@@ -1485,25 +1513,17 @@ def save_interaction_log(user_input: str, bot_response: str):
             "version": "interaction-1.0"
         }
         
-        # Log entry flat
-        log_entry = {
-            "session_id": session_id,
-            "timestamp": timestamp,
-            "user_input": user_input,
-            "bot_response": bot_response,
-            "metadata": metadata
-        }
+        # V4.0: Usa Supabase invece di file
+        # Nota: duration_ms non disponibile qui, usa 0 come default
+        save_to_supabase_log(
+            user_input=user_input,
+            bot_response=bot_response,
+            metadata=metadata,
+            duration_ms=0  # Non disponibile in questo contesto
+        )
         
-        # Scrittura atomica thread-safe con pathlib
-        from pathlib import Path
-        import threading
-        _interaction_lock = threading.Lock()
-        
-        log_file_path = Path(LOG_FILE).absolute()
-        log_file_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with _interaction_lock:
-            with open(str(log_file_path), 'a', encoding='utf-8') as f:
+    except Exception as e:
+        logger.warning(f"⚠️ Errore save_interaction_log: {e}")
                 f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
                 f.flush()  # Forza flush del buffer
                 os.fsync(f.fileno())  # Forza scrittura immediata su disco
@@ -2937,18 +2957,32 @@ def render_main_application():
     # Sidebar Navigation (V4.0: usa ui_components)
     with st.sidebar:
         try:
+            # Tenta di caricare la nuova UI
             from ui_components import render_navigation_sidebar
             selected_page = render_navigation_sidebar()
             st.session_state.selected_page = selected_page
-        except ImportError:
-            # Fallback minimale se ui_components non disponibile
-            selected_page = st.radio(
-                "🧭 Navigazione",
-                ["🤖 Chatbot Triage", "📊 Analytics Dashboard"],
-                label_visibility="visible"
-            )
+        except ImportError as e:
+            # Se fallisce, mostra l'errore MA usa una navigazione minimale (NON la vecchia sidebar)
+            st.error(f"UI Error: {e}")
+            st.warning("Check session_storage.py for st. calls outside context")
+            selected_page = st.radio("Navigazione (Fallback)", ["🤖 Chatbot Triage", "📊 Analytics Dashboard"])
             st.session_state.selected_page = selected_page
     
+    # Gestione Routing SPA
+    if "Analytics" in str(selected_page):
+        try:
+            import backend
+            backend.render_dashboard()
+            return  # Stop chat execution - mostra solo dashboard
+        except ImportError as e:
+            st.error(f"❌ Errore caricamento Analytics: {e}")
+            st.info("💡 Verifica che backend.py sia presente nella directory root.")
+            return
+        except Exception as e:
+            st.error(f"❌ Errore imprevisto Analytics: {e}")
+            return
+    
+    # STEP 3: Continua con Chatbot (se non Analytics)
     render_dynamic_step_tracker()
 
     # STEP 3: Check disponibilità AI

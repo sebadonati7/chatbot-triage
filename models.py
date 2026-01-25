@@ -178,11 +178,20 @@ class TriageMetadata(BaseModel):
     confidence: float = Field(default=0.8, ge=0.0, le=1.0, description="Affidabilità")
     fallback_used: bool = Field(default=False, description="Fallback attivato")
     
-    @field_validator("urgenza")
+    @field_validator("urgenza", mode="before")
     @classmethod
-    def clamp_urgenza(cls, v: int) -> int:
-        """Clamp urgenza in range 1-5."""
-        return max(1, min(5, v))
+    def normalize_urgenza(cls, v: Any) -> int:
+        """
+        Normalizza urgenza: converte 0 o valori negativi in 1 (bassa urgenza).
+        Clamp in range 1-5 per evitare crash di validazione.
+        """
+        try:
+            val = int(v)
+            # Se è 0 o negativo, forzalo a 1 (Bassa urgenza) invece di crashare
+            return max(1, min(5, val))
+        except (ValueError, TypeError):
+            # Default safe se conversione fallisce
+            return 1
 
 
 class DispositionRecommendation(BaseModel):
