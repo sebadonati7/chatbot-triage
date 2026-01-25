@@ -163,6 +163,7 @@ class SupabaseLogger:
             Lista completa di record log
         """
         if not self.client:
+            print("🔍 DEBUG: No Supabase client available")
             return []
         
         try:
@@ -179,22 +180,33 @@ class SupabaseLogger:
                     .execute()
                 )
                 
+                # DEBUG: Print response details
+                print(f"🔍 DEBUG: Supabase query response status: {response}")
+                print(f"🔍 DEBUG: Response.data type: {type(response.data)}")
+                print(f"🔍 DEBUG: Response.data length: {len(response.data) if response.data else 0}")
+                
                 if not response.data:
+                    print(f"🔍 DEBUG: No data in response (offset={offset})")
                     break
                 
                 all_records.extend(response.data)
+                print(f"🔍 DEBUG: Accumulated {len(all_records)} records so far")
                 
                 # Se riceviamo meno di page_size record, abbiamo finito
                 if len(response.data) < page_size:
+                    print(f"🔍 DEBUG: Last page received ({len(response.data)} < {page_size}), stopping")
                     break
                 
                 offset += page_size
             
+            print(f"🔍 DEBUG: Total records retrieved: {len(all_records)}")
             return all_records
             
         except Exception as e:
-            # Silent error - non usare st.error qui (causa problemi in import)
+            # Print full error trace for debugging
+            import traceback
             print(f"❌ Errore recupero log completi: {e}")
+            print(f"🔍 DEBUG: Full traceback:\n{traceback.format_exc()}")
             return []
 
 

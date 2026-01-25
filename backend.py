@@ -252,6 +252,17 @@ class TriageDataStore:
                     # Recupera tutti i log
                     raw_logs = logger.get_all_logs_for_analytics()
                     
+                    # DEBUG: Print raw response to diagnose RLS/parsing issues
+                    print(f"🔍 DEBUG: Supabase response type: {type(raw_logs)}")
+                    print(f"🔍 DEBUG: Supabase response length: {len(raw_logs) if raw_logs else 0}")
+                    if raw_logs and len(raw_logs) > 0:
+                        print(f"🔍 DEBUG: First record keys: {list(raw_logs[0].keys()) if isinstance(raw_logs[0], dict) else 'NOT A DICT'}")
+                        print(f"🔍 DEBUG: First record sample: {str(raw_logs[0])[:200] if raw_logs else 'EMPTY'}")
+                    elif raw_logs is None:
+                        print("🔍 DEBUG: Supabase returned None (check RLS policies)")
+                    elif raw_logs == []:
+                        print("🔍 DEBUG: Supabase returned empty list [] (check RLS policies or table is empty)")
+                    
                     if raw_logs:
                         # Converti logs Supabase al formato interno
                         for log in raw_logs:

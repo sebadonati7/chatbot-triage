@@ -2949,23 +2949,11 @@ def render_main_application():
         return
 
     # --- SIDEBAR (UNIFIED) - Always Clean Navigation ---
-    # Solo render_navigation_sidebar, mai legacy sidebar
+    # NO TRY/EXCEPT: Let import fail loudly to see real error trace
     with st.sidebar:
-        try:
-            from ui_components import render_navigation_sidebar
-            selected_page = render_navigation_sidebar()
-            st.session_state.selected_page = selected_page
-        except ImportError as e:
-            # Show error clearly if import fails
-            st.error(f"❌ UI Module Error: {e}")
-            st.warning("💡 Verifica che ui_components.py sia presente e importabile")
-            # Minimal fallback (no legacy buttons)
-            selected_page = st.radio(
-                "🧭 Navigazione (Fallback)",
-                ["🤖 Chatbot Triage", "📊 Analytics Dashboard"],
-                label_visibility="visible"
-            )
-            st.session_state.selected_page = selected_page
+        from ui_components import render_navigation_sidebar
+        selected_page = render_navigation_sidebar()
+        st.session_state.selected_page = selected_page
     
     # --- ROUTING ---
     if "Analytics" in str(selected_page):
@@ -3274,32 +3262,26 @@ def main(log_file_path: str = None):
     
     # === CHATBOT MODE (Default) ===
     """Entry point principale con landing page e triage condizionale."""
-    # Import UI components
-    try:
-        from ui_components import (
-            render_landing_page,
-            render_chat_logo,
-            inject_siraya_css,
-            detect_medical_intent,
-            get_bot_avatar,
-            get_chat_placeholder
-        )
-        UI_COMPONENTS_AVAILABLE = True
-    except ImportError:
-        UI_COMPONENTS_AVAILABLE = False
-        logger.warning("⚠️ ui_components.py non disponibile - usando UI legacy")
+    # Import UI components - NO TRY/EXCEPT: Let it fail loudly to see real error
+    from ui_components import (
+        render_landing_page,
+        render_chat_logo,
+        inject_siraya_css,
+        detect_medical_intent,
+        get_bot_avatar,
+        get_chat_placeholder
+    )
     
     # Landing Page Gate (Single Consent Flow)
-    if UI_COMPONENTS_AVAILABLE:
-        if not render_landing_page():
-            # User hasn't accepted terms yet
-            return
-        
-        # Inject SIRAYA CSS Theme (Medical Professional)
-        inject_siraya_css()
-        
-        # Render small logo in chat interface
-        render_chat_logo()
+    if not render_landing_page():
+        # User hasn't accepted terms yet
+        return
+    
+    # Inject SIRAYA CSS Theme (Medical Professional)
+    inject_siraya_css()
+    
+    # Render small logo in chat interface
+    render_chat_logo()
     
     # Initialize medical intent tracking
     if 'medical_intent_detected' not in st.session_state:
