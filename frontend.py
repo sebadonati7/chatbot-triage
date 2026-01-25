@@ -2934,12 +2934,10 @@ def render_main_application():
     # Inizializza il servizio farmacie
     pharmacy_db = PharmacyService()
 
-    # STEP 1: Consenso unificato (gestito da render_landing_page in main())
-    # Questo check è ridondante se render_landing_page() è già chiamato in main()
-    # Manteniamo per compatibilità legacy, ma render_landing_page() ha priorità
+    # STEP 1: Consenso Privacy (GDPR Compliance)
+    # Check consenso privacy prima di procedere con l'applicazione
     if not st.session_state.get('privacy_accepted', False) and not st.session_state.get('terms_accepted', False):
-        # Se siamo qui, render_landing_page() non è stato chiamato o non ha funzionato
-        # Mostra fallback minimo
+        # Mostra disclaimer e richiedi consenso
         st.markdown("### 📋 Benvenuto in SIRAYA")
         render_disclaimer()
         if st.button("✅ Accetto e Inizio Triage", type="primary", use_container_width=True, key="accept_gdpr_btn"):
@@ -3264,18 +3262,12 @@ def main(log_file_path: str = None):
     """Entry point principale con landing page e triage condizionale."""
     # Import UI components - NO TRY/EXCEPT: Let it fail loudly to see real error
     from ui_components import (
-        render_landing_page,
         render_chat_logo,
         inject_siraya_css,
         detect_medical_intent,
         get_bot_avatar,
         get_chat_placeholder
     )
-    
-    # Landing Page Gate (Single Consent Flow)
-    if not render_landing_page():
-        # User hasn't accepted terms yet
-        return
     
     # Inject SIRAYA CSS Theme (Medical Professional)
     inject_siraya_css()
