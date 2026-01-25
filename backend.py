@@ -1489,12 +1489,13 @@ def render_sintomi_table(kpi_clin: Dict):
         height=400
     )
 # === MAIN APPLICATION ===
-def main(log_file_path: str = None):
+def render_dashboard(log_file_path: str = None):
     """
-    Entry point principale con gestione errori robusta.
+    Renderizza dashboard analytics completo.
+    V4.0: Funzione modularizzata per essere importata da frontend.py.
     
     Args:
-        log_file_path: Path del file log centralizzato da app.py (opzionale)
+        log_file_path: Path al file JSONL (opzionale, usa Supabase di default)
     """
     # Usa il path centralizzato se fornito, altrimenti usa il default
     global LOG_FILE
@@ -1909,4 +1910,4 @@ def main(log_file_path: str = None):
 
 # === ENTRY POINT ===
 if __name__ == "__main__":
-    main()
+    render_dashboard()

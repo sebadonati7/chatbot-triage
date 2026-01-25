@@ -1491,76 +1491,6 @@ def generate_ai_reply(prompt_text: str) -> Optional[str]:
 # ============================================
 # LOGGING INTERACTION-BASED (REAL-TIME)
 # ============================================
-def save_interaction_log(user_input: str, bot_response: str):
-    """
-    V4.0: Salva ogni interazione su Supabase (Zero-File Policy).
-    Chiamata dopo ogni risposta AI per visibilità real-time nella dashboard.
-    
-    DEPRECATED: Ora usa save_to_supabase_log() direttamente.
-    Mantenuta per compatibilità con codice legacy.
-    """
-    # 1. Verifica consenso privacy
-    if not st.session_state.get("privacy_accepted", False):
-        return
-    
-    # Recupero session_id in modo sicuro
-    session_id = st.session_state.get("session_id", "unknown_session")
-
-    try:
-        # 2. Preparazione Metadati
-        current_step = st.session_state.get('current_step', TriageStep.LOCATION)
-        
-        # Gestione sicura del nome dello step (se è enum o stringa)
-        step_name = current_step.name if hasattr(current_step, 'name') else str(current_step)
-        
-        metadata = {
-            "step": step_name,
-            "specialization": st.session_state.get('specialization', 'Generale'),
-            "urgency_level": st.session_state.collected_data.get('DISPOSITION', {}).get('urgency', 3),
-            "location": st.session_state.collected_data.get('LOCATION'),
-            "version": "interaction-1.0"
-        }
-
-        # 3. Tentativo salvataggio su Supabase (Prioritario)
-        # Nota: duration_ms impostato a 0 perché questa funzione legacy non tracciava il tempo
-        if 'save_to_supabase_log' in globals():
-            save_to_supabase_log(
-                user_input=user_input,
-                bot_response=bot_response,
-                metadata=metadata,
-                duration_ms=0
-            )
-        else:
-            # Se la funzione non è importata, solleva errore per attivare il fallback
-            raise NameError("save_to_supabase_log non definita")
-            
-        logger.debug(f"✅ Interaction log salvato su Supabase: session={session_id}")
-
-    except Exception as e:
-        logger.warning(f"⚠️ Errore salvataggio Supabase: {e}. Attivazione fallback locale.")
-        
-        # 4. Fallback: Salvataggio su File Locale (Solo se Supabase fallisce)
-        try:
-            # Ricostruiamo l'oggetto log per il file locale
-            log_entry = {
-                "session_id": session_id,
-                "timestamp": datetime.now().isoformat(),
-                "user_input": user_input,
-                "bot_response": bot_response,
-                "metadata": metadata
-            }
-            
-            # Apertura sicura del file
-            with open("triage_logs.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
-                f.flush()
-                os.fsync(f.fileno())
-                
-            logger.info(f"✅ Salvataggio fallback locale riuscito.")
-            
-        except Exception as e_local:
-            # Se fallisce anche il file locale, registriamo l'errore critico
-            logger.error(f"❌ Fallimento critico salvataggio (Supabase + File): {e_local}")
 # PARTE 2: Logging Strutturato per Backend Analytics (Summary - Legacy)
 # SIRAYA 2026 Evolution: Usa LogManager atomico per scrittura thread-safe
 def save_to_supabase_log(user_input: str, bot_response: str, metadata: dict, duration_ms: int = 0):
@@ -3108,9 +3038,7 @@ def render_main_application():
                 logger.info(f"🔄 Trigger AI attivato con prompt: '{trigger_prompt}'")
                 ai_response = generate_ai_reply(trigger_prompt)
                 
-                # Salva interaction log (real-time)
-                if ai_response:
-                    save_interaction_log(trigger_prompt, ai_response)
+                # Logging handled in generate_ai_reply() - no duplicate logging
                 
                 # Reset flag
                 st.session_state.trigger_ai = False
@@ -3125,11 +3053,8 @@ def render_main_application():
             user_input = DataSecurity.sanitize_input(raw_input)
             
             # V6.0: Usa generate_ai_reply() per consistenza con bottoni
+            # Logging handled inside generate_ai_reply() - no duplicate logging
             ai_response = generate_ai_reply(user_input)
-            
-            # V6.0: Salva interaction log (real-time)
-            if ai_response:
-                save_interaction_log(user_input, ai_response)
             
             # Rerun per mostrare risposta
             st.rerun()
