@@ -2959,6 +2959,10 @@ def render_main_application():
         backend.render_dashboard()
         return  # Stop chat execution - mostra solo dashboard
     
+    # --- MAIN CHAT INTERFACE ---
+    # Title replacement for render_chat_logo
+    st.title("🏥 SIRAYA Health Navigator")
+    
     # STEP 3: Continua con Chatbot (se non Analytics)
     render_dynamic_step_tracker()
 
@@ -3246,23 +3250,14 @@ def main(log_file_path: str = None):
     
     if selected_page == "📊 Analytics Dashboard":
         # Carica Analytics Dashboard
-        try:
-            import backend
-            backend.render_dashboard(log_file_path=LOG_FILE)
-            return
-        except ImportError as e:
-            st.error(f"❌ Errore caricamento Analytics: {e}")
-            st.info("💡 Verifica che backend.py sia presente nella directory root.")
-            return
-        except Exception as e:
-            st.error(f"❌ Errore imprevisto Analytics: {e}")
-            return
+        import backend
+        backend.render_dashboard(log_file_path=LOG_FILE)
+        return
     
     # === CHATBOT MODE (Default) ===
     """Entry point principale con landing page e triage condizionale."""
     # Import UI components - NO TRY/EXCEPT: Let it fail loudly to see real error
     from ui_components import (
-        render_chat_logo,
         inject_siraya_css,
         detect_medical_intent,
         get_bot_avatar,
@@ -3271,9 +3266,6 @@ def main(log_file_path: str = None):
     
     # Inject SIRAYA CSS Theme (Medical Professional)
     inject_siraya_css()
-    
-    # Render small logo in chat interface
-    render_chat_logo()
     
     # Initialize medical intent tracking
     if 'medical_intent_detected' not in st.session_state:
