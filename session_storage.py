@@ -1,26 +1,219 @@
-﻿import os
+﻿"""
+SIRAYA Health Navigator - Session Storage & Supabase Integration
+V4.0: Zero-File Policy - Full migration to Supabase
+"""
+
+import os
 import json
 import time
+import streamlit as st
 from typing import Any, Dict, List, Optional
+from datetime import datetime
+
+# ============================================================================
+# SUPABASE INTEGRATION (V4.0 - Zero-File Policy)
+# ============================================================================
+
+@st.cache_resource
+def init_supabase():
+    """
+    Inizializza connessione Supabase con connection pooling.
+    Usa st.cache_resource per garantire una singola istanza per sessione.
+    
+    Returns:
+        Supabase client o None se fallisce
+    """
+    try:
+        from supabase import create_client, Client
+        
+        # Leggi credenziali da st.secrets
+        url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL"))
+        key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY"))
+        
+        if not url or not key:
+            st.warning("⚠️ Credenziali Supabase non trovate. Logging disabilitato.")
+            return None
+        
+        client: Client = create_client(url, key)
+        st.success("✅ Connessione Supabase attiva", icon="🔗")
+        return client
+        
+    except ImportError:
+        st.error("❌ Libreria supabase non installata. Esegui: pip install supabase")
+        return None
+    except Exception as e:
+        st.error(f"❌ Errore connessione Supabase: {e}")
+        return None
+
+
+class SupabaseLogger:
+    """
+    Logger centralizzato per interazioni chatbot su Supabase.
+    Zero-File Policy: Tutti i log vengono scritti nel database.
+    """
+    
+    def __init__(self):
+        self.client = init_supabase()
+        self.table_name = "triage_logs"
+    
+    def log_interaction(
+        self,
+        session_id: str,
+        user_input: str,
+        bot_response: str,
+        metadata: Dict[str, Any],
+        duration_ms: int = 0
+    ) -> bool:
+        """
+        Salva interazione chatbot su Supabase.
+        
+        Args:
+            session_id: ID univoco sessione
+            user_input: Messaggio utente
+            bot_response: Risposta bot
+            metadata: Metadati aggiuntivi (triage_step, urgency_code, etc.)
+            duration_ms: Durata risposta AI in millisecondi
+        
+        Returns:
+            bool: True se salvato con successo
+        """
+        if not self.client:
+            # Fail silently - non crashare mai la chat
+            return False
+        
+        try:
+            # Prepara record per Supabase
+            record = {
+                "session_id": session_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "user_input": user_input,
+                "bot_response": bot_response,
+                "metadata": json.dumps(metadata, ensure_ascii=False),
+                "duration_ms": duration_ms,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            
+            # Insert con gestione errori
+            response = self.client.table(self.table_name).insert(record).execute()
+            
+            # Verifica successo
+            if response.data:
+                return True
+            else:
+                st.warning(f"⚠️ Log non salvato: {response}")
+                return False
+                
+        except Exception as e:
+            # Fail silently - logging non deve mai bloccare la chat
+            st.warning(f"⚠️ Errore logging Supabase: {e}")
+            return False
+    
+    def get_recent_logs(self, limit: int = 50, session_id: Optional[str] = None) -> List[Dict]:
+        """
+        Recupera log recenti da Supabase.
+        
+        Args:
+            limit: Numero massimo di record
+            session_id: Filtra per session_id specifico (opzionale)
+        
+        Returns:
+            Lista di record log
+        """
+        if not self.client:
+            return []
+        
+        try:
+            query = self.client.table(self.table_name).select("*")
+            
+            if session_id:
+                query = query.eq("session_id", session_id)
+            
+            response = query.order("created_at", desc=True).limit(limit).execute()
+            
+            return response.data if response.data else []
+            
+        except Exception as e:
+            st.error(f"❌ Errore recupero log: {e}")
+            return []
+    
+    def get_all_logs_for_analytics(self) -> List[Dict]:
+        """
+        Recupera TUTTI i log per analytics dashboard.
+        Usa paginazione per dataset grandi.
+        
+        Returns:
+            Lista completa di record log
+        """
+        if not self.client:
+            return []
+        
+        try:
+            all_records = []
+            page_size = 1000
+            offset = 0
+            
+            while True:
+                response = (
+                    self.client.table(self.table_name)
+                    .select("*")
+                    .order("created_at", desc=False)
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                
+                if not response.data:
+                    break
+                
+                all_records.extend(response.data)
+                
+                # Se riceviamo meno di page_size record, abbiamo finito
+                if len(response.data) < page_size:
+                    break
+                
+                offset += page_size
+            
+            return all_records
+            
+        except Exception as e:
+            st.error(f"❌ Errore recupero log completi: {e}")
+            return []
+
+
+# ============================================================================
+# FACTORY FUNCTION
+# ============================================================================
+
+_logger_singleton: Optional[SupabaseLogger] = None
+
+def get_logger() -> SupabaseLogger:
+    """
+    Singleton per SupabaseLogger.
+    
+    Returns:
+        SupabaseLogger instance
+    """
+    global _logger_singleton
+    if _logger_singleton is None:
+        _logger_singleton = SupabaseLogger()
+    return _logger_singleton
+
+
+# ============================================================================
+# LEGACY FILE-BASED STORAGE (Deprecated - manteniamo per compatibilità)
+# ============================================================================
 
 SESSIONS_DIR = os.environ.get("SESSION_STORAGE_DIR", "sessions")
 
 class FileSessionStorage:
     """
-    Semplice storage basato su file JSON nella cartella `sessions/`.
-    Metodi:
-      - load_session(session_id) -> dict | None
-      - save_session(session_id, data) -> bool
-      - delete_session(session_id) -> bool
-      - list_active_sessions() -> List[Dict[str, Any]]
-      - cleanup_old_sessions(max_age_hours) -> int (deleted count)
+    DEPRECATED: Storage basato su file JSON nella cartella `sessions/`.
+    Manteniamo per compatibilità legacy, ma si consiglia Supabase.
     """
     def __init__(self, base_dir: str = SESSIONS_DIR):
         self.base_dir = os.path.abspath(base_dir)
         os.makedirs(self.base_dir, exist_ok=True)
 
     def _path(self, session_id: str) -> str:
-        # semplice sanificazione del nome file
         safe_id = "".join(c for c in session_id if c.isalnum() or c in "-_.")
         return os.path.join(self.base_dir, f"{safe_id}.json")
 
@@ -37,7 +230,6 @@ class FileSessionStorage:
     def save_session(self, session_id: str, data: Dict[str, Any]) -> bool:
         p = self._path(session_id)
         try:
-            # Scrittura atomica semplice: scrivi su file temporaneo e rinomina
             tmp = p + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -88,59 +280,32 @@ class FileSessionStorage:
                     continue
         return deleted
 
-# Factory function (usata dal backend_api.py)
+
 _storage_singleton: Optional[FileSessionStorage] = None
 
 def get_storage() -> FileSessionStorage:
+    """DEPRECATED: Usa get_logger() per Supabase invece."""
     global _storage_singleton
     if _storage_singleton is None:
         _storage_singleton = FileSessionStorage()
     return _storage_singleton
 
 
-# ============================================================================
-# COMPATIBILITY FUNCTIONS (per frontend.py)
-# ============================================================================
-
 def sync_session_to_storage(session_id: str, session_state: Any) -> bool:
-    """
-    Sincronizza session_state a storage.
-    Alias per save_session per compatibilità con frontend.py.
-    
-    Args:
-        session_id: ID sessione
-        session_state: Streamlit session_state object
-    
-    Returns:
-        bool: True se salvato con successo
-    """
+    """DEPRECATED: Compatibilità legacy."""
     storage = get_storage()
-    
-    # Converti session_state a dict (escludi chiavi private di Streamlit)
     data = {}
     for key, value in session_state.items():
         if not key.startswith('_') and key != 'rerun':
             try:
-                # Prova a serializzare (skip oggetti non serializzabili)
                 json.dumps(value, default=str)
                 data[key] = value
             except (TypeError, ValueError):
-                # Skip oggetti non serializzabili
                 continue
-    
     return storage.save_session(session_id, data)
 
 
 def load_session_from_storage(session_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Carica sessione da storage.
-    Alias per load_session per compatibilità con frontend.py.
-    
-    Args:
-        session_id: ID sessione
-    
-    Returns:
-        Dict con dati sessione o None
-    """
+    """DEPRECATED: Compatibilità legacy."""
     storage = get_storage()
     return storage.load_session(session_id)

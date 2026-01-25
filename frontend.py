@@ -1138,66 +1138,40 @@ def render_header(current_phase=None):
 
 def render_sidebar(pharmacy_db):
     """
-    V3.2: Sidebar riscritta completamente con icone Streamlit native e styling CSS.
-    Layout minimale: Stato connessione, Reset, Chiudi Chat.
+    V4.0: Sidebar unificata con navigazione SPA.
+    Layout: Solo navigazione tra Chatbot e Analytics.
     """
-    # CSS per migliorare leggibilità bottoni sidebar e garantire contrasto
-    st.markdown("""
-    <style>
-    /* Styling bottoni sidebar per leggibilità - contrasto garantito */
-    section[data-testid="stSidebar"] button {
-        color: #1A1C1F !important;
-        background-color: #f8fafc !important;
-        border: 1px solid #e2e8f0 !important;
-        font-weight: 500 !important;
-    }
-    section[data-testid="stSidebar"] button:hover {
-        background-color: #e2e8f0 !important;
-        border-color: #cbd5e1 !important;
-        color: #1A1C1F !important;
-    }
-    /* Bottone Chiudi Chat con feedback visivo chiaro */
-    button[data-testid="baseButton-secondary"][aria-label*="Chiudi"],
-    button[data-testid="baseButton-secondary"]:has-text("Chiudi") {
-        background-color: #fee2e2 !important;
-        border: 2px solid #dc2626 !important;
-        color: #991b1b !important;
-    }
-    button[data-testid="baseButton-secondary"][aria-label*="Chiudi"]:hover,
-    button[data-testid="baseButton-secondary"]:has-text("Chiudi"):hover {
-        background-color: #fecaca !important;
-        border-color: #b91c1c !important;
-        color: #7f1d1d !important;
-    }
-    /* Forza contrasto testo su tutti i bottoni sidebar */
-    section[data-testid="stSidebar"] .stButton > button {
-        color: #1A1C1F !important;
-    }
-    section[data-testid="stSidebar"] .stButton > button:not([type="primary"]) {
-        background-color: #ffffff !important;
-        color: #1A1C1F !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
     with st.sidebar:
-        # === BRANDING SIRAYA ===
-        st.markdown("""
-        <div style="text-align: center; padding: 20px 0;">
-            <div style="font-size: 2em; font-weight: 300; letter-spacing: 0.15em; color: #4A90E2;">
-                SIRAYA
+        # Usa componente di navigazione da ui_components
+        try:
+            from ui_components import render_navigation_sidebar
+            selected_page = render_navigation_sidebar()
+            
+            # Salva selezione in session_state
+            st.session_state.selected_page = selected_page
+            
+        except ImportError:
+            # Fallback se ui_components non disponibile
+            st.markdown("""
+            <div style="text-align: center; padding: 20px 0;">
+                <div style="font-size: 2em; font-weight: 300; letter-spacing: 0.15em; color: #4A90E2;">
+                    SIRAYA
+                </div>
+                <div style="font-size: 0.85em; color: #6b7280; margin-top: 5px;">
+                    Health Navigator
+                </div>
             </div>
-            <div style="font-size: 0.85em; color: #6b7280; margin-top: 5px;">
-                SIRAYA Health Navigator
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.divider()
-        
-        # === STATO CONNESSIONE ===
-        st.markdown("**📡 Stato Connessione**")
-        connection_status = st.session_state.get('ai_connection_status', 'unknown')
+            """, unsafe_allow_html=True)
+            
+            st.divider()
+            
+            selected_page = st.radio(
+                "🧭 Navigazione",
+                ["🤖 Chatbot Triage", "📊 Analytics Dashboard"],
+                label_visibility="collapsed"
+            )
+            
+            st.session_state.selected_page = selected_page
         if connection_status == 'online':
             st.success("✅ Connesso")
         elif connection_status == 'offline':
@@ -1724,18 +1698,66 @@ def save_interaction_log(user_input: str, bot_response: str):
 
 # PARTE 2: Logging Strutturato per Backend Analytics (Summary - Legacy)
 # SIRAYA 2026 Evolution: Usa LogManager atomico per scrittura thread-safe
+def save_to_supabase_log(user_input: str, bot_response: str, metadata: dict, duration_ms: int = 0):
+    """
+    V4.0: Salva interazione su Supabase invece di JSONL.
+    Zero-File Policy: Tutti i log vanno nel database.
+    
+    Args:
+        user_input: Input utente
+        bot_response: Risposta bot
+        metadata: Metadati aggiuntivi (triage_step, urgency_code, etc.)
+        duration_ms: Durata risposta AI in millisecondi
+    """
+    # Verifica consenso privacy
+    if not st.session_state.get("privacy_accepted", False):
+        logger.info("Skipping log save: Privacy consent not given")
+        return False
+    
+    try:
+        from session_storage import get_logger
+        
+        logger_db = get_logger()
+        
+        if not logger_db.client:
+            logger.warning("⚠️ Supabase non disponibile, log non salvato")
+            return False
+        
+        # Ottieni session_id
+        session_id = st.session_state.get('session_id', 'unknown')
+        
+        # Salva su Supabase
+        success = logger_db.log_interaction(
+            session_id=session_id,
+            user_input=user_input,
+            bot_response=bot_response,
+            metadata=metadata,
+            duration_ms=duration_ms
+        )
+        
+        if success:
+            logger.info(f"✅ Log salvato su Supabase per sessione {session_id}")
+        else:
+            logger.warning(f"⚠️ Errore salvataggio log su Supabase")
+        
+        return success
+        
+    except ImportError:
+        logger.error("❌ session_storage non disponibile")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Errore save_to_supabase_log: {e}")
+        return False
+
+
 def save_structured_log():
     """
-    Salva log sessione in formato strutturato JSON per analytics.
-    Schema version "2.0" ottimizzato per l'analisi clinica.
+    DEPRECATED: Funzione legacy mantenuta per compatibilità.
+    V4.0: Ora usa Supabase tramite save_to_supabase_log().
     
-    SIRAYA 2026 Evolution:
-    - Usa LogManager atomico per thread-safety
-    - Timestamp ISO 8601 generato AL MOMENTO DELLA SCRITTURA (2026)
-    - Validazione schema integrata
-    - Zero Pandas Policy: solo dict, list, json
+    Salva log sessione completo per analytics.
     """
-    # Verifica consenso (allineato con privacy_accepted dello session_state)
+    # Verifica consenso
     if not st.session_state.get("privacy_accepted", False):
         logger.info("Skipping log save: Privacy consent not given")
         return
@@ -3346,7 +3368,8 @@ def render_main_application():
 
 def main(log_file_path: str = None):
     """
-    Entry point principale del frontend.
+    Entry point principale del frontend con navigazione SPA.
+    V4.0: Gestisce sia Chatbot che Analytics Dashboard.
     
     Args:
         log_file_path: Path del file log centralizzato da app.py (opzionale)
@@ -3355,6 +3378,26 @@ def main(log_file_path: str = None):
     global LOG_FILE
     if log_file_path:
         LOG_FILE = log_file_path
+    
+    # === NAVIGATION CONTROL (V4.0 SPA) ===
+    # Check se utente ha selezionato Analytics Dashboard
+    selected_page = st.session_state.get('selected_page', "🤖 Chatbot Triage")
+    
+    if selected_page == "📊 Analytics Dashboard":
+        # Carica Analytics Dashboard
+        try:
+            import backend
+            backend.render_dashboard(log_file_path=LOG_FILE)
+            return
+        except ImportError as e:
+            st.error(f"❌ Errore caricamento Analytics: {e}")
+            st.info("💡 Verifica che backend.py sia presente nella directory root.")
+            return
+        except Exception as e:
+            st.error(f"❌ Errore imprevisto Analytics: {e}")
+            return
+    
+    # === CHATBOT MODE (Default) ===
     """Entry point principale con landing page e triage condizionale."""
     # Import UI components
     try:

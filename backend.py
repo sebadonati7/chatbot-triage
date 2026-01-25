@@ -2,6 +2,7 @@
 CHATBOT.ALPHA v2 - Analytics Dashboard
 Analytics engine per visualizzazione KPI clinici e operativi.
 
+V4.0: Supabase Migration - Zero-File Policy
 Porta: 8502
 Principi: Zero Pandas, Zero PX, Robustezza Assoluta
 """
@@ -9,11 +10,13 @@ Principi: Zero Pandas, Zero PX, Robustezza Assoluta
 import streamlit as st
 
 # CONFIGURAZIONE PAGINA - DEVE ESSERE LA PRIMA ISTRUZIONE STREAMLIT
-st.set_page_config(
-    page_title="Health Navigator | Strategic Analytics",
-    page_icon="🧬",
-    layout="wide"
-)
+# Wrappata in condizione per evitare errori quando importato da frontend.py
+if __name__ == "__main__":
+    st.set_page_config(
+        page_title="Health Navigator | Strategic Analytics",
+        page_icon="🧬",
+        layout="wide"
+    )
 
 import json
 import os
@@ -110,17 +113,22 @@ cleanup_streamlit_cache()
 class TriageDataStore:
     """
     Storage e analisi dati triage con parsing robusto.
+    V4.0: Supporto Supabase per Zero-File Policy.
     """
     
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str = None, use_supabase: bool = True):
         self.filepath = filepath
+        self.use_supabase = use_supabase
         self.records: List[Dict] = []
         self.sessions: Dict[str, List[Dict]] = {}
         self.parse_errors = 0
-        self.validation_errors = 0  # Nuovo: conta errori validazione schema
+        self.validation_errors = 0
         
-        # Cache key per questo filepath
-        self._cache_key = str(Path(filepath).absolute())
+        # Cache key per questo filepath (se usato)
+        if filepath:
+            self._cache_key = str(Path(filepath).absolute())
+        else:
+            self._cache_key = "supabase_cache"
         
         self._load_data()
         self._enrich_data()
@@ -228,9 +236,73 @@ class TriageDataStore:
     
     def _load_data(self):
         """
-        Caricamento JSONL con gestione errori robusta, encoding resiliente,
-        validazione schema e cache-busting basato su mtime.
+        Caricamento dati con supporto Supabase e fallback JSONL.
+        V4.0: Prima prova Supabase, poi fallback su file locale.
         """
+        # === SUPABASE LOADING (Priority) ===
+        if self.use_supabase:
+            try:
+                from session_storage import get_logger
+                
+                logger = get_logger()
+                
+                if logger.client:
+                    st.info("📡 Caricamento dati da Supabase...")
+                    
+                    # Recupera tutti i log
+                    raw_logs = logger.get_all_logs_for_analytics()
+                    
+                    if raw_logs:
+                        # Converti logs Supabase al formato interno
+                        for log in raw_logs:
+                            try:
+                                # Parse metadata JSON
+                                metadata = {}
+                                if 'metadata' in log and log['metadata']:
+                                    try:
+                                        metadata = json.loads(log['metadata'])
+                                    except:
+                                        pass
+                                
+                                # Formato record per compatibilità con analytics
+                                record = {
+                                    'session_id': log.get('session_id', 'unknown'),
+                                    'timestamp': log.get('timestamp', ''),
+                                    'user_input': log.get('user_input', ''),
+                                    'bot_response': log.get('bot_response', ''),
+                                    'duration_ms': log.get('duration_ms', 0),
+                                    'metadata': metadata
+                                }
+                                
+                                # Validazione base
+                                if record['session_id'] and record['timestamp']:
+                                    self.records.append(record)
+                                    
+                                    # Raggruppa per sessione
+                                    sid = record['session_id']
+                                    if sid not in self.sessions:
+                                        self.sessions[sid] = []
+                                    self.sessions[sid].append(record)
+                            
+                            except Exception as e:
+                                self.parse_errors += 1
+                                continue
+                        
+                        st.success(f"✅ Caricati {len(self.records)} record da Supabase")
+                        return
+                    else:
+                        st.warning("⚠️ Nessun log disponibile in Supabase")
+                        
+            except ImportError:
+                st.warning("⚠️ session_storage non disponibile, uso fallback file locale")
+            except Exception as e:
+                st.error(f"❌ Errore caricamento Supabase: {e}")
+        
+        # === FALLBACK: JSONL FILE LOADING ===
+        if not self.filepath:
+            st.warning("⚠️ Nessuna fonte dati disponibile (né Supabase né file locale)")
+            return
+        
         filepath_obj = Path(self.filepath)
         
         if not filepath_obj.exists():
@@ -1824,7 +1896,15 @@ def main(log_file_path: str = None):
     
     # === FOOTER ===
     st.divider()
-    st.caption("CHATBOT.ALPHA v2 | Analytics Engine | Powered by Streamlit + Plotly GO")
+    st.caption("SIRAYA Health Navigator V4.0 | Analytics Engine | Supabase-Powered")
+
+
+def main(log_file_path: str = None):
+    """
+    Legacy main function - wrappa render_dashboard per compatibilità.
+    Usa questa solo quando backend.py viene eseguito standalone.
+    """
+    render_dashboard(log_file_path)
 
 
 # === ENTRY POINT ===
