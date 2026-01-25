@@ -2952,6 +2952,44 @@ def get_step_display_name(step: TriageStep) -> str:
 
 def render_main_application():
     """Entry point principale applicazione."""
+    # ============================================
+    # GLOBAL CSS INJECTION - Blue Medical Style
+    # ============================================
+    # Inietta CSS globale per sidebar blu professionale (sempre attivo)
+    st.markdown("""
+    <style>
+        /* Force Sidebar Background Color - Medical Blue Gradient */
+        [data-testid="stSidebar"] {
+            background-color: #f0f4f8 !important; /* Light Blue/Grey */
+            background-image: linear-gradient(180deg, #E3F2FD 0%, #FFFFFF 100%) !important; /* Medical Blue Gradient */
+            border-right: 1px solid #d1d5db !important;
+        }
+        /* Fix Text Color in Sidebar for contrast */
+        [data-testid="stSidebar"] .stMarkdown, 
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] h4 {
+            color: #1f2937 !important;
+        }
+        /* Ensure radio buttons are readable */
+        [data-testid="stSidebar"] label {
+            color: #1f2937 !important;
+        }
+        /* Button styling in sidebar */
+        [data-testid="stSidebar"] button {
+            background-color: #ffffff !important;
+            color: #1f2937 !important;
+            border: 1px solid #d1d5db !important;
+        }
+        [data-testid="stSidebar"] button:hover {
+            background-color: #e3f2fd !important;
+            border-color: #90caf9 !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
     init_session()
     
     # Inizializza orchestrator PRIMA di tutto
@@ -2980,14 +3018,26 @@ def render_main_application():
             st.rerun()
         return
 
-    # --- SIDEBAR & NAVIGATION (NO LEGACY FALLBACK) ---
-    # Import diretto: se fallisce, vogliamo vedere l'errore a schermo per debuggarlo!
+    # --- SIDEBAR (UNIFIED) - Always Clean Navigation ---
+    # Solo render_navigation_sidebar, mai legacy sidebar
     with st.sidebar:
-        from ui_components import render_navigation_sidebar
-        selected_page = render_navigation_sidebar()
-        st.session_state.selected_page = selected_page
+        try:
+            from ui_components import render_navigation_sidebar
+            selected_page = render_navigation_sidebar()
+            st.session_state.selected_page = selected_page
+        except ImportError as e:
+            # Show error clearly if import fails
+            st.error(f"❌ UI Module Error: {e}")
+            st.warning("💡 Verifica che ui_components.py sia presente e importabile")
+            # Minimal fallback (no legacy buttons)
+            selected_page = st.radio(
+                "🧭 Navigazione (Fallback)",
+                ["🤖 Chatbot Triage", "📊 Analytics Dashboard"],
+                label_visibility="visible"
+            )
+            st.session_state.selected_page = selected_page
     
-    # Routing
+    # --- ROUTING ---
     if "Analytics" in str(selected_page):
         import backend
         backend.render_dashboard()
