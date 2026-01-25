@@ -1,6 +1,6 @@
 """
-SIRAYA Health Navigator - UI Components & Admin Tools
-V4.0: Componenti riutilizzabili per UI e strumenti admin
+SIRAYA Health Navigator - UI Components
+V5.0: Clean Slate - Only components used by frontend.py
 """
 
 import streamlit as st
@@ -94,191 +94,11 @@ def show_admin_logs(limit: int = 50):
         st.error(f"❌ Errore visualizzazione log: {e}")
 
 
-def show_session_stats(session_id: str):
-    """
-    Visualizza statistiche dettagliate per una sessione specifica.
-    
-    Args:
-        session_id: ID sessione da analizzare
-    """
-    st.markdown(f"### 📊 Session Analytics: `{session_id}`")
-    
-    try:
-        from session_storage import get_logger
-        
-        logger = get_logger()
-        
-        if not logger.client:
-            st.error("❌ Connessione Supabase non disponibile")
-            return
-        
-        # Recupera log sessione
-        logs = logger.get_recent_logs(limit=1000, session_id=session_id)
-        
-        if not logs:
-            st.warning(f"⚠️ Nessun log trovato per sessione {session_id}")
-            return
-        
-        # Analisi sessione
-        total_interactions = len(logs)
-        total_duration = sum(log.get('duration_ms', 0) for log in logs)
-        avg_duration = total_duration / total_interactions if total_interactions > 0 else 0
-        
-        # Estrai metadata
-        triage_steps = []
-        urgency_codes = []
-        for log in logs:
-            try:
-                metadata = json.loads(log.get('metadata', '{}'))
-                if metadata.get('triage_step'):
-                    triage_steps.append(metadata['triage_step'])
-                if metadata.get('urgency_code'):
-                    urgency_codes.append(metadata['urgency_code'])
-            except:
-                continue
-        
-        # Metriche
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("💬 Interazioni", total_interactions)
-        with col2:
-            st.metric("⏱️ Durata Totale", f"{total_duration/1000:.1f}s")
-        with col3:
-            st.metric("⚡ Risposta Media", f"{avg_duration:.0f}ms")
-        with col4:
-            final_code = urgency_codes[-1] if urgency_codes else "N/A"
-            st.metric("🏥 Codice Finale", final_code)
-        
-        # Timeline interazioni
-        st.markdown("#### 📈 Timeline Interazioni")
-        for i, log in enumerate(logs, 1):
-            with st.expander(f"Interazione {i} - {log.get('timestamp', 'N/A')}"):
-                st.markdown(f"**👤 User:** {log.get('user_input', 'N/A')}")
-                st.markdown(f"**🤖 Bot:** {log.get('bot_response', 'N/A')}")
-                st.caption(f"Duration: {log.get('duration_ms', 0)}ms")
-        
-    except Exception as e:
-        st.error(f"❌ Errore analisi sessione: {e}")
-
-
 # ============================================================================
-# UI COMPONENTS RIUTILIZZABILI
+# NAVIGATION COMPONENT
 # ============================================================================
 
-def render_metric_card(title: str, value: str, delta: Optional[str] = None, icon: str = "📊"):
-    """
-    Renderizza card metrica stilizzata.
-    
-    Args:
-        title: Titolo metrica
-        value: Valore principale
-        delta: Variazione (opzionale)
-        icon: Icona (default 📊)
-    """
-    delta_html = f"<div style='color: #10b981; font-size: 0.9em;'>{delta}</div>" if delta else ""
-    
-    st.markdown(f"""
-    <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                padding: 20px; border-radius: 15px; color: white; margin-bottom: 15px;'>
-        <div style='font-size: 2em; margin-bottom: 5px;'>{icon}</div>
-        <div style='font-size: 0.9em; opacity: 0.9;'>{title}</div>
-        <div style='font-size: 2em; font-weight: bold; margin: 10px 0;'>{value}</div>
-        {delta_html}
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def render_status_badge(status: str, color: str = "#3b82f6"):
-    """
-    Renderizza badge di stato inline.
-    
-    Args:
-        status: Testo badge
-        color: Colore hex (default blu)
-    """
-    st.markdown(f"""
-    <span style='background-color: {color}; color: white; padding: 4px 12px; 
-                 border-radius: 12px; font-size: 0.85em; font-weight: 500;'>
-        {status}
-    </span>
-    """, unsafe_allow_html=True)
-
-
-def render_info_box(title: str, content: str, type: str = "info"):
-    """
-    Renderizza box informativo stilizzato.
-    
-    Args:
-        title: Titolo box
-        content: Contenuto
-        type: Tipo (info, warning, error, success)
-    """
-    colors = {
-        "info": {"bg": "#dbeafe", "border": "#3b82f6", "text": "#1e40af"},
-        "warning": {"bg": "#fef3c7", "border": "#f59e0b", "text": "#92400e"},
-        "error": {"bg": "#fee2e2", "border": "#ef4444", "text": "#991b1b"},
-        "success": {"bg": "#d1fae5", "border": "#10b981", "text": "#065f46"}
-    }
-    
-    theme = colors.get(type, colors["info"])
-    
-    st.markdown(f"""
-    <div style='background-color: {theme["bg"]}; border-left: 4px solid {theme["border"]}; 
-                padding: 15px; border-radius: 8px; margin: 15px 0;'>
-        <div style='color: {theme["text"]}; font-weight: 600; margin-bottom: 8px;'>{title}</div>
-        <div style='color: {theme["text"]};'>{content}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def render_loading_state(message: str = "Caricamento in corso..."):
-    """
-    Renderizza stato di caricamento personalizzato.
-    
-    Args:
-        message: Messaggio da visualizzare
-    """
-    st.markdown(f"""
-    <div style='text-align: center; padding: 40px;'>
-        <div style='font-size: 3em; animation: pulse 2s infinite;'>⏳</div>
-        <div style='color: #6b7280; margin-top: 15px;'>{message}</div>
-    </div>
-    <style>
-        @keyframes pulse {{
-            0%, 100% {{ opacity: 1; }}
-            50% {{ opacity: 0.5; }}
-        }}
-    </style>
-    """, unsafe_allow_html=True)
-
-
-def render_empty_state(title: str = "Nessun dato disponibile", 
-                        description: str = "Inizia una nuova sessione per visualizzare i dati",
-                        icon: str = "📭"):
-    """
-    Renderizza stato vuoto stilizzato.
-    
-    Args:
-        title: Titolo
-        description: Descrizione
-        icon: Icona
-    """
-    st.markdown(f"""
-    <div style='text-align: center; padding: 60px 20px; color: #6b7280;'>
-        <div style='font-size: 4em; margin-bottom: 20px;'>{icon}</div>
-        <div style='font-size: 1.5em; font-weight: 600; margin-bottom: 10px; color: #374151;'>
-            {title}
-        </div>
-        <div style='font-size: 1em;'>{description}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# ============================================================================
-# NAVIGATION HELPERS
-# ============================================================================
-
-def render_navigation_sidebar():
+def render_navigation_sidebar() -> str:
     """
     Renderizza sidebar di navigazione unificata.
     DEVE essere chiamata all'interno di st.sidebar context.
@@ -286,6 +106,7 @@ def render_navigation_sidebar():
     Returns:
         str: Pagina selezionata ("Chatbot" o "Analytics")
     """
+    # Logo e Header
     st.markdown("""
     <div style="text-align: center; padding: 20px 0;">
         <div style="font-size: 2em; font-weight: 300; letter-spacing: 0.15em; color: #4A90E2;">
@@ -308,6 +129,16 @@ def render_navigation_sidebar():
     
     st.divider()
     
+    # Privacy Acceptance
+    privacy_accepted = st.checkbox(
+        "✅ Accetto l'informativa privacy",
+        value=st.session_state.get("privacy_accepted", False),
+        key="privacy_checkbox"
+    )
+    st.session_state.privacy_accepted = privacy_accepted
+    
+    st.divider()
+    
     # Connection Status
     st.markdown("**📡 Stato Sistema**")
     
@@ -322,4 +153,8 @@ def render_navigation_sidebar():
     except:
         st.error("❌ Errore Sistema")
     
-    return page
+    # Map selection to clean string
+    if "Analytics" in page:
+        return "Analytics"
+    else:
+        return "Chatbot"

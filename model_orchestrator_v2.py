@@ -854,3 +854,94 @@ Per CHIEF_COMPLAINT:
     def is_available(self) -> bool:
         """Controlla se almeno uno dei servizi è configurato."""
         return bool(self.groq_client or self.gemini_model)
+    
+    def process_message(self, user_message: str, session_id: str = "") -> str:
+        """
+        Metodo sincrono per processare un messaggio utente.
+        Wrapper per call_ai_streaming usato da frontend.py.
+        
+        Args:
+            user_message: Messaggio utente da processare
+            session_id: ID sessione (opzionale, per tracking)
+        
+        Returns:
+            str: Risposta completa del bot
+        """
+        # Recupera stato dalla sessione
+        collected_data = st.session_state.get("collected_data", {})
+        messages = st.session_state.get("messages", [])
+        
+        # Determina fase corrente
+        current_step = st.session_state.get("current_step", "INIT")
+        is_first = len(messages) <= 1
+        
+        # Determina path (A = emergenza, B = mental health, C = standard)
+        path = "C"  # Default: standard
+        if collected_data.get("RED_FLAGS"):
+            path = "A"
+        
+        # Aggiungi messaggio utente alla lista
+        api_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
+        api_messages.append({"role": "user", "content": user_message})
+        
+        # Esegui chiamata AI in modo sincrono
+        full_response = ""
+        
+        try:
+            # Crea event loop se necessario
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # Esegui async generator e raccogli risultato
+            async def collect_response():
+                nonlocal full_response
+                response_obj = None
+                
+                async for item in self.call_ai_streaming(
+                    api_messages, path, current_step, 
+                    collected_data, is_first
+                ):
+                    if isinstance(item, str):
+                        full_response = item
+                    elif isinstance(item, TriageResponse):
+                        response_obj = item
+                        full_response = item.testo
+                        
+                        # Aggiorna collected_data con dati estratti
+                        if item.dati_estratti:
+                            for key, value in item.dati_estratti.items():
+                                if value:
+                                    st.session_state.collected_data[key] = value
+                        
+                        # Aggiorna fase corrente
+                        if item.fase_corrente:
+                            st.session_state.current_step = item.fase_corrente
+                
+                return full_response
+            
+            # Esegui
+            if loop.is_running():
+                # Se già in un loop async (es. Streamlit), usa thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, collect_response())
+                    full_response = future.result(timeout=90)
+            else:
+                full_response = loop.run_until_complete(collect_response())
+                
+        except Exception as e:
+            logger.error(f"process_message ERROR: {e}")
+            full_response = "Mi scuso, si è verificato un errore tecnico. Potresti ripetere la domanda?"
+        
+        return full_response
+
+
+# ============================================================================
+# ALIAS PER FRONTEND.PY
+# ============================================================================
+
+# Orchestrator è l'alias usato da frontend.py
+Orchestrator = ModelOrchestrator
