@@ -65,7 +65,7 @@ class SupabaseLogger:
         duration_ms: int = 0
     ) -> bool:
         """
-        Salva interazione chatbot su Supabase.
+        Salva interazione chatbot su Supabase con schema SQL completo.
         
         Args:
             session_id: ID univoco sessione
@@ -82,30 +82,46 @@ class SupabaseLogger:
             return False
         
         try:
-            # Prepara record per Supabase
-            record = {
+            # Estrazione sicura con defaults schema-compliant
+            payload = {
+                # Core fields
                 "session_id": session_id,
-                "timestamp": datetime.utcnow().isoformat(),
+                "created_at": datetime.utcnow().isoformat(),
                 "user_input": user_input,
                 "bot_response": bot_response,
-                "metadata": json.dumps(metadata, ensure_ascii=False),
-                "duration_ms": duration_ms,
-                "created_at": datetime.utcnow().isoformat()
+                
+                # Clinical KPI
+                "detected_intent": metadata.get('intent', metadata.get('detected_intent', 'triage')),
+                "triage_code": metadata.get('triage_code') or metadata.get('codice_urgenza') or metadata.get('urgency_code', 'N/D'),
+                "medical_specialty": metadata.get('medical_specialty') or metadata.get('specialization', 'Generale'),
+                "suggested_facility_type": metadata.get('suggested_facility_type') or metadata.get('destinazione', 'N/D'),
+                "reasoning": metadata.get('reasoning', ''),
+                "estimated_wait_time": metadata.get('wait_time', metadata.get('estimated_wait_time', '')),
+                
+                # Technical KPI
+                "processing_time_ms": duration_ms,
+                "model_version": metadata.get('model', metadata.get('model_version', 'v2.0')),
+                "tokens_used": metadata.get('tokens', metadata.get('tokens_used', 0)),
+                "client_ip": metadata.get('client_ip', ''),
+                
+                # Metadata dump (full JSON)
+                "metadata": json.dumps(metadata, ensure_ascii=False)
             }
             
             # Insert con gestione errori
-            response = self.client.table(self.table_name).insert(record).execute()
+            response = self.client.table(self.table_name).insert(payload).execute()
             
             # Verifica successo
             if response.data:
                 return True
             else:
-                st.warning(f"⚠️ Log non salvato: {response}")
+                # Silent warning - non usare st.warning qui per evitare problemi di contesto
+                print(f"⚠️ Log non salvato: {response}")
                 return False
                 
         except Exception as e:
             # Fail silently - logging non deve mai bloccare la chat
-            st.warning(f"⚠️ Errore logging Supabase: {e}")
+            print(f"⚠️ Errore logging Supabase: {e}")
             return False
     
     def get_recent_logs(self, limit: int = 50, session_id: Optional[str] = None) -> List[Dict]:

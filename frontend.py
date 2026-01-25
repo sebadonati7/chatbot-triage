@@ -1136,188 +1136,6 @@ def render_header(current_phase=None):
     # Logging per monitoraggio efficacia
     logger.info(f"Header renderizzato con successo per lo step {current_step.name} (Valore: {current_step.value})")
 
-def render_sidebar(pharmacy_db):
-    """
-    V4.0: Sidebar unificata con navigazione SPA.
-    Layout: Solo navigazione tra Chatbot e Analytics.
-    """
-    with st.sidebar:
-        # Usa componente di navigazione da ui_components
-        try:
-            from ui_components import render_navigation_sidebar
-            selected_page = render_navigation_sidebar()
-            
-            # Salva selezione in session_state
-            st.session_state.selected_page = selected_page
-            
-        except ImportError:
-            # Fallback se ui_components non disponibile
-            st.markdown("""
-            <div style="text-align: center; padding: 20px 0;">
-                <div style="font-size: 2em; font-weight: 300; letter-spacing: 0.15em; color: #4A90E2;">
-                    SIRAYA
-                </div>
-                <div style="font-size: 0.85em; color: #6b7280; margin-top: 5px;">
-                    Health Navigator
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.divider()
-            
-            selected_page = st.radio(
-                "🧭 Navigazione",
-                ["🤖 Chatbot Triage", "📊 Analytics Dashboard"],
-                label_visibility="collapsed"
-            )
-            
-            st.session_state.selected_page = selected_page
-        if connection_status == 'online':
-            st.success("✅ Connesso")
-        elif connection_status == 'offline':
-            st.error("❌ Offline")
-        else:
-            st.info("ℹ️ Verifica in corso...")
-        
-        st.divider()
-        
-        # === BOTTONI AZIONE MINIMALI ===
-        # Bottone Reset
-        if st.button("🔄 Reset Sessione", use_container_width=True, key="sidebar_reset"):
-            for key in list(st.session_state.keys()):
-                if key not in ['log_file_path']:  # Mantieni path log centralizzato
-                    del st.session_state[key]
-            st.rerun()
-        
-        # Bottone Chiudi Chat (con icona corretta)
-        if st.button("✖️ Chiudi Chat", use_container_width=True, key="sidebar_close", type="secondary"):
-            st.session_state.chat_closed = True
-            st.info("💬 Chat chiusa. Clicca 'Reset Sessione' per riavviare.")
-        
-        st.divider()
-        
-        # === PROGRESSO TRIAGE ===
-        current_phase = PHASES[st.session_state.current_phase_idx]
-        st.markdown(f"**Specializzazione Backend:** `{st.session_state.specialization}`")
-        st.progress((st.session_state.current_phase_idx + 1) / len(PHASES))
-        
-        # === RICERCA SERVIZI - HTML/CSS Container (NO st.expander) ===
-        st.markdown("---")
-        with st.container():
-            st.markdown("""
-            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 10px;">
-                <h4 style="margin: 0 0 10px 0; color: #1f2937;">📍 Ricerca Servizi e Strutture</h4>
-                <p style="font-size: 0.85em; color: #6b7280; margin: 0;">Scrivi il servizio o la specialità (es. Ginecologia o Visita).</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            c_input = st.text_input(
-                "In quale comune?", 
-                key="sidebar_geo_comune", 
-                value=st.session_state.get('user_comune', ''),
-                placeholder="es. Cento"
-            )
-            
-            s_input = st.selectbox(
-                "Di cosa hai bisogno?",
-                options=st.session_state.get('service_catalog', ["Caricamento..."]),
-                key="sidebar_service_select",
-                index=None,
-                placeholder="Cerca servizio o prestazione..."
-            )
-            
-            if st.button("🔍 Cerca e Invia in Chat", use_container_width=True, key="exec_search_btn"):
-                if not c_input or not s_input:
-                    st.warning("⚠️ Per favore, inserisci sia il comune che il servizio.")
-                else:
-                    with st.spinner("Consultando i database territoriali..."):
-                        found = find_facilities_smart(s_input, c_input)
-                    
-                    if found:
-                        msg = f"### 📍 Risultati per: {s_input}\n"
-                        msg += f"Analisi territoriale effettuata per il comune di: **{c_input}**\n\n---\n"
-                        
-                        for i, r in enumerate(found, 1):
-                            link = make_gmaps_link(r)
-                            contatti = r.get('contatti', {})
-                            tel = contatti.get('telefono') or contatti.get('telephone') or "N/D"
-                            
-                            msg += f"**{i}. {r['nome']}**\n"
-                            msg += f"🏢 *{r.get('tipologia', 'Servizio Sanitario')}*\n"
-                            msg += f"📍 {r['indirizzo']} ({r['comune']})\n"
-                            msg += f"📞 {tel} | [🚗 Apri Navigatore Maps]({link})\n\n"
-                        
-                        st.session_state.messages.append({"role": "assistant", "content": msg})
-                        st.success("✅ Strutture inviate nella chat!")
-                        st.rerun()
-                    else:
-                        st.error("❌ Nessuna struttura trovata in questa zona.")
-        
-        # === IMPOSTAZIONI ACCESSIBILITÀ - HTML/CSS Container (NO st.expander) ===
-        st.markdown("---")
-        with st.container():
-            st.markdown("""
-            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px;">
-                <h4 style="margin: 0 0 10px 0; color: #1f2937;">♿ Impostazioni Accessibilità</h4>
-                <p style="font-size: 0.85em; color: #6b7280; margin: 0 0 15px 0;">Personalizza l'interfaccia</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            high_contrast = st.checkbox(
-                "Contrasto Elevato",
-                value=st.session_state.get('high_contrast', False),
-                key='high_contrast',
-                help="Tema scuro con contrasto aumentato"
-            )
-            
-            if high_contrast:
-                st.markdown("""
-                <style>
-                    .stApp { background-color: #000000 !important; color: #ffffff !important; }
-                    .stButton>button { background-color: #ffffff !important; color: #000000 !important; }
-                </style>
-                """, unsafe_allow_html=True)
-            
-            font_size = st.select_slider(
-                "Dimensione Testo",
-                options=["Piccolo", "Normale", "Grande", "Molto Grande"],
-                value=st.session_state.get('font_size', "Normale"),
-                key='font_size'
-            )
-            
-            font_size_map = {"Piccolo": "0.9em", "Normale": "1.0em", "Grande": "1.2em", "Molto Grande": "1.5em"}
-            st.markdown(f"""
-            <style>
-                .stMarkdown, .stText, .stChatMessage {{ font-size: {font_size_map[font_size]} !important; }}
-            </style>
-            """, unsafe_allow_html=True)
-            
-            auto_speech = st.checkbox(
-                "Lettura Automatica Risposte",
-                value=st.session_state.get('auto_speech', False),
-                key='auto_speech',
-                help="Legge automaticamente ogni risposta del bot"
-            )
-            
-            reduce_motion = st.checkbox(
-                "Riduci Animazioni",
-                value=st.session_state.get('reduce_motion', False),
-                key='reduce_motion'
-            )
-            
-            if reduce_motion:
-                st.markdown("""
-                <style>
-                    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
-                </style>
-                """, unsafe_allow_html=True)
-            
-            if st.button("🔄 Ripristina Default", use_container_width=True, key="reset_accessibility_btn"):
-                for key in ['high_contrast', 'font_size', 'auto_speech', 'reduce_motion']:
-                    if key in st.session_state: 
-                        del st.session_state[key]
-                st.rerun()
-
 
 # --- SESSION STATE, LOGICA DI AVANZAMENTO E GESTIONE DATI ---
 
@@ -3092,8 +2910,22 @@ def render_main_application():
             st.rerun()
         return
 
-    # STEP 2: Rendering UI principale
-    render_sidebar(pharmacy_db)
+    # STEP 2: Rendering UI principale con sidebar unificata
+    # Sidebar Navigation (V4.0: usa ui_components)
+    with st.sidebar:
+        try:
+            from ui_components import render_navigation_sidebar
+            selected_page = render_navigation_sidebar()
+            st.session_state.selected_page = selected_page
+        except ImportError:
+            # Fallback minimale se ui_components non disponibile
+            selected_page = st.radio(
+                "🧭 Navigazione",
+                ["🤖 Chatbot Triage", "📊 Analytics Dashboard"],
+                label_visibility="visible"
+            )
+            st.session_state.selected_page = selected_page
+    
     render_dynamic_step_tracker()
 
     # STEP 3: Check disponibilità AI
